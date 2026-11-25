@@ -27,11 +27,17 @@ OUT = os.path.join(HERE, "..", "docs")
 # --------------------------------------------------------------------------
 V_MIN, V_MAX = 85.0, 285.0           # Vrms, both ports
 P_CONT, P_PEAK, T_PEAK = 10e3, 100e3, 10.0
+# Rev B peak envelope: 100 kW down to V_KNEE, constant current below it.
+V_KNEE = 200.0
+I_PEAK = P_PEAK / V_KNEE             # 500 A rms
+V_D = 120.0                          # lowest voltage at which I_PEAK is delivered with D = D_PK
 F_LINE = 60.0
-D_PK = 0.25                          # phase shift (fraction of half period) at 100 kW / 85 V
+D_PK = 0.25                          # phase shift (fraction of half period) at I_PEAK / V_D
+D_MAX = 0.35                         # never run beyond this
 L_STRAY = 60e-9                      # EST bridge-to-transformer bus + terminations, both sides
 T_DEAD = 200e-9
 T_AMB = 50.0                         # deg C inside enclosure
+TJ_LIMIT = 125.0                     # design target at the end of the 10 s peak: 25 K under the 150 C ceiling used for EST thermal data (175 C rated)
 V_GRID = [85.0, 120.0, 208.0, 240.0, 285.0]
 
 TH = np.linspace(0, math.pi, 721)[1:-1]     # half line cycle
@@ -54,8 +60,10 @@ class Module:
     rth_jc: float       # K/W per switch (EST)
     qoss400: float      # C, output charge at 400 V per switch (EST)
     qg: float           # C total gate charge
-    tf: float = 30e-9   # channel current fall time (EST, gate-drive dependent)
+    cost_sw: float      # USD per switch position, low volume (EST)
     rth_cs: float = 0.03
+    tf: float = 30e-9   # channel current fall time (EST, gate-drive dependent)
+    n_par: int = 1
 
     def rds(self, tj):
         return self.rds25 * (1 + self.tc * (tj - 25))
@@ -63,10 +71,17 @@ class Module:
     def qoss(self, v):
         return self.qoss400 * (np.maximum(v, 1.0) / 400.0) ** 0.55
 
+    def par(self, m):
+        """m devices in parallel per switch position."""
+        return Module(f"{m}x {self.name}", self.rds25 / m, self.tc, self.rth_jc / m, self.qoss400 * m,
+                      self.qg * m, self.cost_sw * m, self.rth_cs / m, self.tf, m)
 
-# rds25 / qg from vendor data found during the study; the rest are EST.
-HM3 = Module("1200V 1.33mOhm 62mm HB (CAB760M12HM3 class)", 1.33e-3, 0.0055, 0.07, 2.4e-6, 2.7e-6)
-XM3 = Module("1200V 2.6mOhm HB (CAB450M12XM3 class)", 2.6e-3, 0.0055, 0.11, 1.3e-6, 1.33e-6)
+
+# rds25 / qg of the two modules are from vendor listings; everything else,
+# including every price, is EST.
+HM3 = Module("1.33 mOhm 62 mm half-bridge module", 1.33e-3, 0.0055, 0.07, 2.4e-6, 2.7e-6, 950.0)
+XM3 = Module("2.6 mOhm half-bridge module", 2.6e-3, 0.0055, 0.11, 1.3e-6, 1.33e-6, 425.0)
+DISC = Module("16 mOhm TO-247-4 discrete", 16e-3, 0.0055, 0.27, 0.20e-6, 0.21e-6, 38.0, rth_cs=0.45)
 V_GATE_SWING = 19.0   # -4 / +15 V
 
 
@@ -86,10 +101,16 @@ def e_off(mod, v, i):
 # DAB operating point (unity conversion ratio, single phase shift)
 # --------------------------------------------------------------------------
 def l_cell_required(f, n_cells):
-    """Series inductance per cell so that P_PEAK at V_MIN needs phase shift D_PK."""
-    vpk = math.sqrt(2) * V_MIN
-    p_inst = 2 * P_PEAK / n_cells                # crest of the 2f power pulsation
+    """Series inductance per cell so that I_PEAK at V_D needs phase shift D_PK."""
+    vpk = math.sqrt(2) * V_D
+    p_inst = 2 * V_D * I_PEAK / n_cells          # crest of the 2f power pulsation
     return vpk ** 2 * 4 * D_PK * (1 - D_PK) / (8 * f * p_inst)
+
+
+def p_peak_at(v, f, l_cell, n_cells):
+    """10 s power available at v: 100 kW, the current limit, or the D_MAX limit."""
+    cap = n_cells * (math.sqrt(2) * v) ** 2 * 4 * D_MAX * (1 - D_MAX) / (8 * f * l_cell) / 2
+    return min(P_PEAK, v * I_PEAK, cap)
 
 
 def op_point(v_rms, p, n_active, f, l_cell, im_pk_403=0.0):
@@ -219,7 +240,7 @@ def design_transformer(f, l_cell, n_cells, im_pk_403, mat=1.0):
         return None
     # operating points one cell must survive
     cont = [op_point(v, P_CONT, 1, f, l_cell, im_pk_403) for v in V_GRID]
-    peak = op_point(V_MIN, P_PEAK, n_cells, f, l_cell, im_pk_403)
+    peak = op_point(V_D, V_D * I_PEAK, n_cells, f, l_cell, im_pk_403)
     best = None
     for core in CORES:
         for stack in (1, 2, 3, 4):
@@ -289,6 +310,7 @@ def design_transformer(f, l_cell, n_cells, im_pk_403, mat=1.0):
                                     fr_cont_85=cl[0][2], fr_peak=pk[2],
                                     dt_cont_K=dt, p_cu_peak_W=pk[0], p_fe_peak_W=pk[1],
                                     dt_adiabatic_K=dt_ad, surf_m2=surf,
+                                    box_L=core.w * core.h * depth * 1e-3,
                                     lm_uH=(403.0 / (4 * f * im_pk_403) * 1e6) if im_pk_403 else None,
                                     _geo=geo)
     return best
@@ -299,15 +321,17 @@ def design_transformer(f, l_cell, n_cells, im_pk_403, mat=1.0):
 # --------------------------------------------------------------------------
 R_BUS_SIDE = 0.15e-3     # EST busbars + EMI filter copper per port, ohm
 P_AUX = 35.0             # control, sensing, fans
+T_SINK_CONT = 65.0       # heatsink temperature before the peak
+DT_SINK_PEAK = 15.0      # heatsink mass is chosen to give this rise in the 10 s event
 
 
-def system_point(v, p, n_active, f, l_cell, n_cells, mod, unf_mod, unf_par, xf, im, tj):
+def system_point(v, p, n_active, f, l_cell, n_cells, mod, unf_mod, xf, im, tj, tj_unf=None):
     o = op_point(v, p, n_active, f, l_cell, im)
-    if o is None:
+    if o is None or o["d"] > D_MAX + 1e-9:
         return None
     s = cell_semi_loss(mod, o, f, tj)
     p_cu, p_fe, _, _ = xf_losses(xf["_geo"], o, 100.0)
-    unf, unf_sw = unfolder_loss(unf_mod, unf_par, o["i_line"], tj)
+    unf, unf_sw = unfolder_loss(unf_mod, 1, o["i_line"], tj if tj_unf is None else tj_unf)
     bus = 2 * R_BUS_SIDE * o["i_line"] ** 2
     gate = s["gate"] * n_active
     loss = n_active * (s["cond"] + s["sw"] + p_cu + p_fe) + gate + unf + bus + P_AUX
@@ -326,118 +350,266 @@ def best_cont(v, p, **kw):
     return min(cands, key=lambda c: c["loss"])
 
 
-M_HEATSINK = 14.0   # kg aluminium in the semiconductor heatsink (EST)
-T_SINK_CONT = 65.0
-
-
 def peak_point(v, **kw):
-    """100 kW for 10 s: iterate junction temperature."""
-    tj = 120.0
-    for _ in range(4):
-        r = system_point(v, P_PEAK, kw["n_cells"], tj=tj, **kw)
+    """10 s peak at v: junction temperatures at the END of the event, self-consistent with Rds(T)."""
+    p = p_peak_at(v, kw["f"], kw["l_cell"], kw["n_cells"])
+    tj_hf = tj_unf = 120.0
+    r = None
+    for _ in range(12):
+        r = system_point(v, p, kw["n_cells"], tj=tj_hf, tj_unf=tj_unf, **kw)
         if r is None:
             return None
-        semis = r["hf_cond"] + r["hf_sw"] + r["unf"]
-        dts = semis * T_PEAK / (M_HEATSINK * 900)
-        tj_hf = T_SINK_CONT + dts + r["hf_per_switch"] * (kw["mod"].rth_jc + kw["mod"].rth_cs)
-        tj_unf = T_SINK_CONT + dts + r["unf_per_switch"] * (kw["unf_mod"].rth_jc + kw["unf_mod"].rth_cs)
-        tj = max(tj_hf, tj_unf)
-    r.update(tj_hf=tj_hf, tj_unf=tj_unf, dt_sink=dts)
+        base = T_SINK_CONT + DT_SINK_PEAK
+        tj_hf = min(base + r["hf_per_switch"] * (kw["mod"].rth_jc + kw["mod"].rth_cs), 400.0)
+        tj_unf = min(base + r["unf_per_switch"] * (kw["unf_mod"].rth_jc + kw["unf_mod"].rth_cs), 400.0)
+    r.update(tj_hf=tj_hf, tj_unf=tj_unf, e_semis=(r["hf_cond"] + r["hf_sw"] + r["unf"]) * T_PEAK)
     return r
 
 
-def evaluate(f, n_cells, mod=HM3, unf_mod=HM3, unf_par=2, mat=1.0):
+_XF_CACHE = {}
+
+
+def evaluate(f, n_cells, mod, unf_mod, mat=1.0):
     l_cell = l_cell_required(f, n_cells)
     im = 4 * float(mod.qoss(403.0)) / T_DEAD        # magnetising peak for ZVS at crest
-    xf = design_transformer(f, l_cell, n_cells, im, mat)
+    key = (f, n_cells, round(im), mat)
+    if key not in _XF_CACHE:
+        _XF_CACHE[key] = design_transformer(f, l_cell, n_cells, im, mat)
+    xf = _XF_CACHE[key]
     if xf is None:
         return dict(f=f, n_cells=n_cells, l_cell_nH=l_cell * 1e9, feasible=False)
-    kw = dict(f=f, l_cell=l_cell, n_cells=n_cells, mod=mod, unf_mod=unf_mod,
-              unf_par=unf_par, xf=xf, im=im)
+    kw = dict(f=f, l_cell=l_cell, n_cells=n_cells, mod=mod, unf_mod=unf_mod, xf=xf, im=im)
     cont = {str(int(v)): best_cont(v, P_CONT, **kw) for v in V_GRID}
     part = {str(int(v)): best_cont(v, 0.25 * P_CONT, **kw) for v in V_GRID}
     peak = {str(int(v)): peak_point(v, **kw) for v in V_GRID}
-    res = dict(f=f, n_cells=n_cells, module=mod.name, feasible=True,
-               l_cell_nH=l_cell * 1e9, im_pk_A=im,
+    tj_hf = max(p["tj_hf"] for p in peak.values())
+    tj_unf = max(p["tj_unf"] for p in peak.values())
+    e_max = max(p["e_semis"] for p in peak.values())
+    res = dict(f=f, n_cells=n_cells, hf=mod.name, unfolder=unf_mod.name, feasible=True,
+               l_cell_nH=l_cell * 1e9, im_pk_A=im, tj_hf=tj_hf, tj_unf=tj_unf,
+               m_sink_kg=max(3.0, e_max / (900 * DT_SINK_PEAK)),
                xf={k: v for k, v in xf.items() if not k.startswith("_")},
                cont=cont, part=part, peak=peak)
     res["_kw"] = kw
     return res
 
 
+# --------------------------------------------------------------------------
+# Cost / volume / mass roll-up.  Every figure here is a rough EST for comparing
+# options against each other, not a quotation.
+# --------------------------------------------------------------------------
+def pkg_volume_l(mod, positions):
+    if "62 mm" in mod.name:
+        return 0.20 * positions / 2 * mod.n_par + 0.04 * positions
+    if "module" in mod.name:
+        return 0.10 * positions / 2 * mod.n_par + 0.04 * positions
+    return 0.012 * positions * mod.n_par + 0.02 * positions
+
+
+def rollup(res, c_link_uF=40.0):
+    kw = res["_kw"]
+    n, hf, unf, xf = kw["n_cells"], kw["mod"], kw["unf_mod"], kw["xf"]
+    m_sink = res["m_sink_kg"]
+    items = {  # name: (cost USD, volume L, mass kg)
+        "HF bridge switches": (8 * n * hf.cost_sw, pkg_volume_l(hf, 8 * n), 0.3 * n),
+        "Unfolder switches": (8 * unf.cost_sw, pkg_volume_l(unf, 8), 0.3),
+        "Gate drives": (30 * 8 * n + 15 * 8, 0.0, 0.3),
+        "Transformers": (450 * n, 1.3 * xf["box_L"] * n, xf["mass_kg"] * n),
+        "Link capacitors": (0.7 * 2 * c_link_uF, 0.004 * 2 * c_link_uF, 0.004 * 2 * c_link_uF),
+        "Heatsink and fans": (12 * m_sink + 80, m_sink / 2.7 / 0.35 + 1.0, m_sink + 0.5),
+        "EMI filters (2 ports)": (700, 4.0, 6.0),
+        "Contactors, fuses, surge (2 ports)": (500, 1.6, 2.4),
+        "Sensing, control, aux supply": (550, 1.2, 0.8),
+        "Busbars, PCBs, enclosure": (700, 0.0, 4.0),
+    }
+    return finish(items)
+
+
+def finish(items, packing=0.45):
+    cost = sum(v[0] for v in items.values())
+    vol = sum(v[1] for v in items.values()) / packing
+    mass = sum(v[2] for v in items.values())
+    return dict(items={k: [round(x, 2) for x in v] for k, v in items.items()},
+                cost=cost, volume_L=vol, mass_kg=mass)
+
+
+def non_isolated():
+    """
+    Transformerless alternative: a bidirectional SiC AC switch in series with the
+    line (two common-source positions, always conducting) plus a smaller shunt
+    freewheel switch, run as an AC chopper at duty ~1.  Functions kept: soft
+    connection, fast disconnect, current limiting, a few per cent of voltage
+    trim.  Functions lost: isolation, independent grounding of the two sides.
+    """
+    best = None
+    for m in range(2, 20):
+        d = DISC.par(m)
+        tj = 120.0
+        for _ in range(12):
+            p_sw = d.rds(tj) * I_PEAK ** 2           # conducts the full cycle
+            tj = min(T_SINK_CONT + DT_SINK_PEAK + p_sw * (d.rth_jc + d.rth_cs), 400.0)
+        if tj <= TJ_LIMIT:
+            best = (m, d, tj, p_sw)
+            break
+    m, d, tj, p_sw = best
+    shunt = DISC.par(max(2, m // 3))
+    m_sink = max(2.0, 2 * p_sw * T_PEAK / (900 * DT_SINK_PEAK))
+    loss = {}
+    for v in V_GRID:
+        i = P_CONT / v
+        loss[str(int(v))] = 2 * d.rds(70.0) * i ** 2 + 2 * R_BUS_SIDE * i ** 2 + 8 * d.qg * V_GATE_SWING * 70e3 * 0.25 + 25
+    items = {
+        "Series AC switch": (2 * d.cost_sw, pkg_volume_l(d, 2), 0.2),
+        "Shunt freewheel switch": (2 * shunt.cost_sw, pkg_volume_l(shunt, 2), 0.1),
+        "Gate drives": (30 * 4, 0.0, 0.1),
+        "Chopper inductor and capacitors": (200, 1.0, 2.0),
+        "Heatsink and fans": (12 * m_sink + 60, m_sink / 2.7 / 0.35 + 0.6, m_sink + 0.4),
+        "EMI filters (2 ports, smaller)": (450, 2.4, 3.6),
+        "Contactors, fuses, surge (2 ports)": (500, 1.6, 2.4),
+        "Sensing, control, aux supply": (450, 1.0, 0.7),
+        "Busbars, PCBs, enclosure": (450, 0.0, 2.5),
+    }
+    r = finish(items)
+    r.update(m_series=m, tj=tj, loss_10kW=loss, peak_loss=2 * p_sw + 2 * R_BUS_SIDE * I_PEAK ** 2,
+             devices=2 * m + 2 * shunt.n_par)
+    return r
+
+
 def fmt_row(cols, widths):
     return " | ".join(str(c).ljust(w) for c, w in zip(cols, widths))
 
 
-def main():
-    out = {}
-    print("\n=== Cell-count / module study at 50 kHz (peak corner 100 kW @ 85 V) ===")
-    w = [34, 3, 9, 10, 10, 10, 8, 8, 8]
-    print(fmt_row(["module", "N", "L/cell nH", "HF mods", "loss85 kW", "loss240 kW", "Tj_hf", "Tj_unf", "xf kg"], w))
-    study = []
-    for mod, ns in ((HM3, (3, 4, 5, 6)), (XM3, (6, 8, 10))):
-        for n in ns:
-            r = evaluate(50e3, n, mod)
-            if not r["feasible"]:
-                print(fmt_row([mod.name[:34], n, f"{r['l_cell_nH']:.0f}", "-", "infeasible"], w))
-                continue
-            p85, p240 = r["peak"]["85"], r["peak"]["240"]
-            row = dict(module=mod.name, n=n, l_cell_nH=r["l_cell_nH"], hf_modules=4 * n,
-                       loss85_kW=p85["loss"] / 1e3, loss240_kW=p240["loss"] / 1e3,
-                       tj_hf=p85["tj_hf"], tj_unf=p85["tj_unf"], xf_mass_total=n * r["xf"]["mass_kg"],
-                       eff10k_240=r["cont"]["240"]["eff"])
-            study.append(row)
-            print(fmt_row([mod.name[:34], n, f"{row['l_cell_nH']:.0f}", 4 * n, f"{row['loss85_kW']:.2f}",
-                           f"{row['loss240_kW']:.2f}", f"{row['tj_hf']:.0f}", f"{row['tj_unf']:.0f}",
-                           f"{row['xf_mass_total']:.1f}"], w))
-    out["cell_study"] = study
+def cheapest_unfolder():
+    """Unfolder choice depends only on line current, so pick it once."""
+    opts = [DISC.par(m) for m in range(3, 16)] + [XM3, XM3.par(2), HM3]
+    rows = []
+    for u in opts:
+        tj = 120.0
+        for _ in range(12):
+            p_sw = u.rds(tj) * I_PEAK ** 2 / 2
+            tj = min(T_SINK_CONT + DT_SINK_PEAK + p_sw * (u.rth_jc + u.rth_cs), 400.0)
+        rows.append((u, tj, 8 * u.cost_sw, 8 * p_sw))
+    ok = [r for r in rows if r[1] <= TJ_LIMIT]
+    return min(ok, key=lambda r: r[2]), rows
 
-    print("\n=== Frequency evaluation (N = 4 cells, HM3-class modules) ===")
-    freqs = [50e3, 70e3, 100e3, 140e3, 200e3, 300e3]
-    w = [6, 8, 22, 4, 7, 7, 9, 9, 9, 9, 9, 8]
-    print(fmt_row(["f kHz", "L nH", "core", "N", "gap mm", "xf kg", "xf W@240", "eta10@240",
-                   "eta10@85", "pk85 kW", "Tj pk", "tphi ns"], w))
+
+F_SEL = 70e3
+
+
+def main():
+    out = {"spec": dict(v_min=V_MIN, v_max=V_MAX, p_cont=P_CONT, p_peak=P_PEAK, i_peak=I_PEAK,
+                        v_knee=V_KNEE, tj_limit=TJ_LIMIT)}
+    print(f"Peak envelope: {P_PEAK/1e3:.0f} kW down to {V_KNEE:.0f} V, {I_PEAK:.0f} A below; Tj limit {TJ_LIMIT:.0f} C")
+
+    (unf, unf_tj, unf_cost, unf_loss), rows = cheapest_unfolder()
+    print("\n=== Unfolder options (per-switch thermal check at 500 A, 10 s) ===")
+    for u, tj, c, pl in rows:
+        if u.n_par in (4, 6, 8, 10, 12) or "module" in u.name:
+            print(f"  {u.name:40s} Tj {tj:5.0f} C   cost ${c:6.0f}   loss both ports {pl*2/1e3:5.2f} kW"
+                  + ("   <- cheapest that passes" if u is unf else ""))
+    out["unfolder"] = dict(name=unf.name, tj=unf_tj, cost=unf_cost)
+
+    print("\n=== HF bridge options, 70 kHz (thermally sized) ===")
+    w = [5, 40, 9, 7, 9, 10, 10, 9]
+    print(fmt_row(["cells", "HF switch position", "L/cell nH", "Tj C", "semis $", "eta10@240", "pk loss kW", "block $"], w))
+    study, best = [], None
+    for n in (1, 2, 3):
+        for hf in [HM3, XM3, XM3.par(2)] + [DISC.par(m) for m in range(2, 11)]:
+            r = evaluate(F_SEL, n, hf, unf)
+            if not r["feasible"]:
+                continue
+            ok = r["tj_hf"] <= TJ_LIMIT
+            ru = rollup(r)
+            pk = max(p["loss"] for p in r["peak"].values())
+            row = dict(n=n, hf=hf.name, l_cell_nH=r["l_cell_nH"], tj_hf=r["tj_hf"], ok=ok,
+                       hf_cost=8 * n * hf.cost_sw, eff10_240=r["cont"]["240"]["eff"],
+                       peak_loss_kW=pk / 1e3, block_cost=ru["cost"])
+            study.append(row)
+            if ok and (best is None or ru["cost"] < best[1]["cost"]):
+                best = (r, ru)
+            if ok or hf.n_par == 1:
+                print(fmt_row([n, hf.name, f"{r['l_cell_nH']:.0f}", f"{r['tj_hf']:.0f}" + ("" if ok else " X"),
+                               f"{row['hf_cost']:.0f}", f"{row['eff10_240']*100:.2f}", f"{pk/1e3:.2f}",
+                               f"{ru['cost']:.0f}"], w))
+    out["hf_study"] = study
+
+    # Selection: two cells (shedding, interleaving, a workable leakage target) at lowest cost.
+    cands = [(r, ru) for r, ru in ((evaluate(F_SEL, 2, DISC.par(m), unf), None) for m in range(2, 11))
+             if r["feasible"] and r["tj_hf"] <= TJ_LIMIT]
+    sel = cands[0][0]
+    sel_ru = rollup(sel)
+    print(f"\nCheapest overall: {best[0]['n_cells']} cell(s), {best[0]['hf']}, ${best[1]['cost']:.0f}")
+    print(f"Selected: 2 cells, {sel['hf']}, ${sel_ru['cost']:.0f}")
+
+    print("\n=== Frequency evaluation for the selected hardware ===")
+    w = [6, 8, 22, 4, 7, 7, 9, 9, 10, 8, 8]
+    print(fmt_row(["f kHz", "L nH", "core", "N", "gap mm", "xf kg", "eta10@240", "eta10@85", "pk loss kW", "Tj pk", "tphi ns"], w))
     sweep = []
-    for f in freqs:
+    for f in [50e3, 70e3, 100e3, 140e3, 200e3, 300e3]:
         mat = 1.0 if f < 250e3 else 0.45      # EST: HF grade (N49/3F36 class) above 250 kHz
-        r = evaluate(f, 4, HM3, mat=mat)
+        r = evaluate(f, 2, sel["_kw"]["mod"], unf, mat=mat)
         if not r["feasible"]:
             print(fmt_row([f"{f/1e3:.0f}", f"{r['l_cell_nH']:.0f}", "no transformer meets leakage/thermal"], w))
             sweep.append(dict(f=f, feasible=False, l_cell_nH=r["l_cell_nH"]))
             continue
         x = r["xf"]
-        c240, c85, p85 = r["cont"]["240"], r["cont"]["85"], r["peak"]["85"]
+        pk = max(p["loss"] for p in r["peak"].values())
         print(fmt_row([f"{f/1e3:.0f}", f"{r['l_cell_nH']:.0f}", f"{x['stack']}x {x['core']}", x["n"],
-                       f"{x['gap_mm']:.1f}", f"{x['mass_kg']:.2f}", f"{x['p_cont_W']['240']:.0f}",
-                       f"{c240['eff']*100:.2f}", f"{c85['eff']*100:.2f}", f"{p85['loss']/1e3:.2f}",
-                       f"{max(p85['tj_hf'], p85['tj_unf']):.0f}", f"{c240['t_phi_ns']:.0f}"], w))
-        sweep.append({k: v for k, v in r.items() if not k.startswith("_")})
+                       f"{x['gap_mm']:.1f}", f"{x['mass_kg']:.2f}", f"{r['cont']['240']['eff']*100:.2f}",
+                       f"{r['cont']['85']['eff']*100:.2f}", f"{pk/1e3:.2f}",
+                       f"{max(r['tj_hf'], r['tj_unf']):.0f}", f"{r['cont']['240']['t_phi_ns']:.0f}"], w))
+        d = {k: v for k, v in r.items() if not k.startswith("_")}
+        d["peak_loss"] = pk
+        sweep.append(d)
     out["freq_sweep"] = sweep
 
-    # ---- selected design: detailed tables ----
-    f_sel, n_sel = 70e3, 4
-    r = evaluate(f_sel, n_sel, HM3)
-    out["selected"] = {k: v for k, v in r.items() if not k.startswith("_")}
+    r = sel
     x = r["xf"]
-    print(f"\n=== Selected design: {f_sel/1e3:.0f} kHz, {n_sel} cells ===")
-    print(json.dumps({k: (round(v, 3) if isinstance(v, float) else v) for k, v in x.items()
-                      if not k.startswith("_")}, indent=1))
+    out["selected"] = {k: v for k, v in r.items() if not k.startswith("_")}
+    print(f"\n=== Selected design detail: {F_SEL/1e3:.0f} kHz, 2 cells, HF {r['hf']}, unfolder {r['unfolder']} ===")
+    print(json.dumps({k: (round(v, 3) if isinstance(v, float) else v) for k, v in x.items()}, indent=1))
     w = [6, 7, 6, 8, 8, 8, 8, 8, 8, 8, 8, 9, 8]
-    for label, key in (("10 kW continuous", "cont"), ("2.5 kW", "part"), ("100 kW / 10 s", "peak")):
+    for label, key in (("10 kW continuous", "cont"), ("2.5 kW", "part"), ("10 s peak", "peak")):
         print(f"\n-- {label} --")
-        print(fmt_row(["Vrms", "cells", "D", "tphi ns", "Itr/cell", "HF cond", "HF sw", "gate",
+        print(fmt_row(["Vrms", "cells", "D", "P kW", "Itr/cell", "HF cond", "HF sw", "gate",
                        "xf cu", "xf fe", "unfold", "loss W", "eta %"], w))
         for v in V_GRID:
             c = r[key][str(int(v))]
-            print(fmt_row([int(v), c["n_active"], f"{c['d']:.4f}", f"{c['t_phi_ns']:.0f}", f"{c['i_tr']:.0f}",
+            print(fmt_row([int(v), c["n_active"], f"{c['d']:.4f}", f"{c['p']/1e3:.1f}", f"{c['i_tr']:.0f}",
                            f"{c['hf_cond']:.0f}", f"{c['hf_sw']:.0f}", f"{c['gate']:.0f}", f"{c['xf_cu']:.0f}",
                            f"{c['xf_fe']:.0f}", f"{c['unf']:.0f}", f"{c['loss']:.0f}", f"{c['eff']*100:.2f}"], w))
             if key == "peak":
-                print(f"       Tj HF {c['tj_hf']:.0f} C, Tj unfolder {c['tj_unf']:.0f} C, "
-                      f"sink +{c['dt_sink']:.1f} K, ZVS over {c['zvs_frac']*100:.0f}% of line cycle")
+                print(f"       Tj HF {c['tj_hf']:.0f} C, Tj unfolder {c['tj_unf']:.0f} C, ZVS {c['zvs_frac']*100:.0f}% of cycle")
+
+    print(f"\n=== Roll-up, isolated block (heatsink {r['m_sink_kg']:.1f} kg) ===")
+    for k, v in sel_ru["items"].items():
+        print(f"  {k:38s} ${v[0]:7.0f}  {v[1]:5.1f} L  {v[2]:5.1f} kg")
+    print(f"  TOTAL  ${sel_ru['cost']:.0f}   {sel_ru['volume_L']:.1f} L enclosure   {sel_ru['mass_kg']:.1f} kg")
+    ni = non_isolated()
+    print(f"\n=== Roll-up, non-isolated block ({ni['m_series']}x 16 mOhm per series position, Tj {ni['tj']:.0f} C) ===")
+    for k, v in ni["items"].items():
+        print(f"  {k:38s} ${v[0]:7.0f}  {v[1]:5.1f} L  {v[2]:5.1f} kg")
+    print(f"  TOTAL  ${ni['cost']:.0f}   {ni['volume_L']:.1f} L enclosure   {ni['mass_kg']:.1f} kg")
+    print("  loss at 10 kW:", {k: round(v) for k, v in ni["loss_10kW"].items()}, f"peak loss {ni['peak_loss']/1e3:.2f} kW")
+    out["rollup_isolated"] = sel_ru
+    out["rollup_non_isolated"] = ni
+
+    print("\n=== Scaling (frame adds 15 % volume, 8 % mass per multi-block assembly) ===")
+    scale = []
+    for label, blocks, par in (("1-phase block", 1, 1), ("3-phase bank", 3, 1), ("3-phase, 5 in parallel", 15, 5)):
+        k_v, k_m = (1.0, 1.0) if blocks == 1 else (1.15, 1.08)
+        row = dict(config=label, blocks=blocks, cont_kW=P_CONT * blocks / 1e3, peak_kW=P_PEAK * blocks / 1e3,
+                   iso_L=sel_ru["volume_L"] * blocks * k_v, iso_kg=sel_ru["mass_kg"] * blocks * k_m,
+                   iso_cost=sel_ru["cost"] * blocks, ni_L=ni["volume_L"] * blocks * k_v,
+                   ni_kg=ni["mass_kg"] * blocks * k_m, ni_cost=ni["cost"] * blocks,
+                   cap_A_240=2 * math.pi * F_LINE * 40e-6 * 240 * par)
+        scale.append(row)
+        print(f"  {label:24s} {row['cont_kW']:5.0f} kW cont {row['peak_kW']:6.0f} kW peak | isolated {row['iso_L']:6.0f} L "
+              f"{row['iso_kg']:5.0f} kg ${row['iso_cost']:7.0f} | non-isolated {row['ni_L']:5.0f} L {row['ni_kg']:4.0f} kg ${row['ni_cost']:6.0f}")
+    out["scaling"] = scale
 
     with open(os.path.join(OUT, "results.json"), "w") as fh:
-        json.dump(out, fh, indent=1, default=float)
+        json.dump(out, fh, indent=1, default=lambda o: float(o) if isinstance(o, (np.floating, float)) else str(o))
     make_plots(out, r)
 
 
@@ -465,8 +637,8 @@ def make_plots(out, sel):
         a.grid(axis="y", alpha=0.3)
     ax[0].legend(fontsize=7)
     ax2 = ax[2]
-    ax2.plot(fk, [4 * s["xf"]["mass_kg"] for s in sw], "o-", label="transformer mass, 4 cells (kg)")
-    ax2.plot(fk, [s["peak"]["85"]["loss"] / 1e3 for s in sw], "s-", label="loss at 100 kW / 85 V (kW)")
+    ax2.plot(fk, [2 * s["xf"]["mass_kg"] for s in sw], "o-", label="transformer mass, 2 cells (kg)")
+    ax2.plot(fk, [s["peak_loss"] / 1e3 for s in sw], "s-", label="worst 10 s peak loss (kW)")
     ax2.plot(fk, [s["cont"]["240"]["t_phi_ns"] / 10 for s in sw], "^-", label="phase shift at 10 kW / 240 V (x10 ns)")
     ax2.set_xlabel("switching frequency, kHz")
     ax2.set_title("Mass, peak loss, timing")
@@ -475,26 +647,31 @@ def make_plots(out, sel):
     fig.tight_layout()
     fig.savefig(os.path.join(OUT, "img", "frequency_sweep.png"), dpi=130)
 
-    # efficiency vs power for the selected design
     kw = sel["_kw"]
-    fig, a = plt.subplots(figsize=(7.5, 4.5))
-    ps = np.logspace(math.log10(500), 5, 60)
+    fig, (a, b) = plt.subplots(1, 2, figsize=(13, 4.5))
     for v in V_GRID:
+        pmax = p_peak_at(v, kw["f"], kw["l_cell"], kw["n_cells"])
+        ps = np.logspace(math.log10(500), math.log10(pmax), 60)
         eff = []
         for p in ps:
-            if p <= P_CONT:
-                c = best_cont(v, p, **kw)
-            else:
-                c = system_point(v, p, kw["n_cells"], tj=110.0, **kw)
+            c = best_cont(v, p, **kw) if p <= P_CONT else system_point(v, p, kw["n_cells"], tj=110.0, **kw)
             eff.append(c["eff"] * 100 if c else np.nan)
         a.semilogx(ps / 1e3, eff, label=f"{v:.0f} V")
     a.axvline(10, color="k", ls=":", lw=0.8)
-    a.set_ylim(85, 100)
+    a.set_ylim(90, 100)
     a.set_xlabel("power, kW (above 10 kW: 10 s rating)")
     a.set_ylabel("efficiency, %")
-    a.set_title(f"Predicted efficiency, {kw['f']/1e3:.0f} kHz, {kw['n_cells']} cells with cell shedding")
+    a.set_title("Predicted efficiency, isolated block")
     a.grid(alpha=0.3, which="both")
     a.legend()
+    vs = np.linspace(V_MIN, V_MAX, 100)
+    b.plot(vs, [p_peak_at(v, kw["f"], kw["l_cell"], kw["n_cells"]) / 1e3 for v in vs], lw=2, label="10 s peak")
+    b.axhline(10, color="C1", lw=2, label="continuous")
+    b.set_xlabel("port voltage, Vrms")
+    b.set_ylabel("kW")
+    b.set_title("Power envelope")
+    b.grid(alpha=0.3)
+    b.legend()
     fig.tight_layout()
     fig.savefig(os.path.join(OUT, "img", "efficiency.png"), dpi=130)
 

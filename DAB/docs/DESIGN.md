@@ -1,364 +1,422 @@
-# 10 kW / 100 kW-peak isolated bidirectional AC-AC dual active bridge
+# 10 kW / 100 kW-peak bidirectional AC-AC dual active bridge block
 
-Preliminary design, revision A. All numbers come from `tools/dab_design.py` and
+Preliminary design, revision B. All numbers come from `tools/dab_design.py` and
 `tools/dab_sim.py`; rerun them to regenerate the tables and plots. Nothing here
-has been built or measured. Section 11 lists what is estimated and what must be
-checked before hardware is committed.
+has been built or measured. Every price, volume and mass is a rough estimate
+for comparing options against each other, not a quotation. Section 13 lists
+what is estimated and what must be checked before hardware is committed.
 
-## 1. Requirement and how it was read
+## What changed from revision A
+
+| | Rev A | Rev B |
+|---|---|---|
+| 10 s peak | 100 kW at any voltage (1176 A at 85 V) | 100 kW at 200 V and above, 500 A limit below |
+| Semiconductor sizing | Large modules, junction peaked at 106 C | Sized by junction temperature at the end of the 10 s (115 C, target 125 C) |
+| Switches | 24 half-bridge modules, about $46k | 144 TO-247 discretes, about $5.5k |
+| Cells | 4 at 387 nH | 2 at 643 nH |
+| Link capacitors | 80 uF per side | 40 uF per side |
+| Role | Stand-alone unit | One block of a three-phase, parallelable system |
+
+## 1. Requirement as now understood
 
 | Item | Value |
 |---|---|
 | Port voltage | 85-285 Vrms on both ports, output equals input (1:1) |
-| Power | 10 kW continuous, 100 kW for 10 s |
+| Continuous power | 10 kW across the whole range |
+| 10 s peak | 100 kW from 200 V up; 500 A below that (60 kW at 120 V, 36 kW at 85 V) |
 | Direction | Bidirectional, may reverse at any instant with no warning |
-| Switches | SiC or GaN |
-| Magnetics | Ferrite transformer, optimised |
-| Switching frequency | 50 kHz minimum, to be evaluated |
-| Compliance | UL safety, FCC emissions |
-| Telemetry | Voltage, current, temperature, power, remotely readable |
+| Behaviour | Like an iron-core transformer of similar rating, including short surges |
+| System use | One block per phase; blocks parallel for larger systems |
+| Isolation | Preferred, not required; a non-isolated variant is costed in section 9 |
+| Switching frequency | 50 kHz minimum |
+| Compliance, telemetry | UL, FCC; voltage, current, temperature, power remotely readable |
 
-Assumptions made where the request was silent. Each one changes the design, so
-please correct any that are wrong:
+Still assumed: the 10 s peak repeats no more often than once every 5 minutes,
+and "power" means real power near unity power factor.
 
-1. **Single phase, 50/60 Hz.** A three-phase unit would be three of these at one
-   third the power each.
-2. **100 kW is available at any voltage in the range, including 85 V.** That is
-   1176 A rms (1663 A crest) and it sets the semiconductor count. See section 10.
-3. **Galvanic isolation is required** (otherwise no transformer is needed), to
-   reinforced-insulation level.
-4. **The 10 s peak repeats no more often than once every 5 minutes.**
-5. **"Power" means real power at near-unity power factor.** Reactive current is
-   carried, with the limits in section 7.
+On a 208 V service a line-to-neutral block sees 120 V. There the surge is 60 kW,
+six times continuous. Getting the full 100 kW at 120 V needs 833 A; section 4
+says what that costs.
 
-## 2. Architecture
+![Efficiency and power envelope](img/efficiency.png)
 
-A dual active bridge is a DC-DC stage, so an AC-AC unit needs something around
-it. Three options were considered:
-
-| Option | Verdict |
-|---|---|
-| Rectifier + DC link + DAB + inverter (three stages) | Rejected. Needs about 13 mF of DC-link capacitance per side to absorb the 100 kW double-line-frequency ripple, plus boost inductors rated 1663 A peak, and three conversion stages in series. |
-| Matrix DAB with four-quadrant switches | Rejected. Same number of devices in the current path as the chosen option but needs four-step commutation and non-standard gate drive. |
-| **AC-link DAB between two line-frequency unfolders** | **Chosen.** No electrolytics, no line-frequency energy storage, standard half-bridge modules, inherently symmetric. |
+## 2. Architecture (unchanged)
 
 ```
- Port 1          unfolder 1      link 1        4 x DAB cells         link 2     unfolder 2        Port 2
- 85-285 V  EMI   (60 Hz, SiC)   |v|, 80 uF   HB - 1:1 xfmr - HB    |v|, 80 uF  (60 Hz, SiC)  EMI  85-285 V
- o------[filter]--[ H-bridge ]----+--------[ cell 1 ... cell 4 ]--------+----[ H-bridge ]--[filter]------o
-                                  |          (interleaved,              |
-                                 ===          shed at light load)      ===
+ Port 1          unfolder 1      link 1        2 x DAB cells         link 2     unfolder 2        Port 2
+ 85-285 V  EMI   (60 Hz, SiC)   |v|, 40 uF   HB - 1:1 xfmr - HB    |v|, 40 uF  (60 Hz, SiC)  EMI  85-285 V
+ o------[filter]--[ H-bridge ]----+--------[ cell 1,  cell 2 ]----------+----[ H-bridge ]--[filter]------o
+                                 ===     (interleaved, one shed        ===
+                                  |        at light load)               |
 ```
 
-Each unfolder is a full bridge switched at line frequency. It presents the
-rectified line voltage |v(t)| to a small film-capacitor link. The DAB cells run
-between the two links at unity conversion ratio at every instant, which is the
-best operating point a DAB has: minimum circulating current and soft switching
-on both bridges.
+A line-frequency unfolder on each port presents the rectified line voltage to a
+small film-capacitor link. Two dual-active-bridge cells run between the links
+at unity conversion ratio. There is no DC link, no electrolytic capacitor and
+no line-frequency energy storage. The link capacitors sit on the DC side of the
+unfolders and both unfolders take one shared polarity command; that is what
+lets out-of-phase current pass through the voltage zero crossing.
 
-Two details matter and both came out of simulation:
+## 3. Inductance
 
-* **The link capacitors sit on the DC side of the unfolders, and both unfolders
-  take one shared polarity command.** A DAB cannot pass current when its link
-  voltages are zero. With the capacitors on the AC side, any current that is out
-  of phase with the voltage has nowhere to go at the zero crossing and the
-  filter-inductor energy drives the capacitors to several hundred volts. With
-  the arrangement above the link never has to reach zero: the unfolders flip
-  with a few volts still on the link and the current carries straight through.
-* **The control law is symmetric** (section 7). The converter never needs to
-  know which port is the source.
+DAB current capability is proportional to voltage and inversely proportional to
+`f * L`. The inductance is set so that 500 A at 120 V needs a phase shift of
+0.25 of a half period:
 
-## 3. Why the low-line peak sets everything
+    f * L_total = 0.0225 ohm    ->   321 nH total at 70 kHz, 643 nH per cell with two cells
 
-DAB power per cell is `P = V1*V2*D*(1-D) / (2*f*L)`, with D the phase shift as a
-fraction of a half period. At 85 V the link crest is only 120 V and the
-instantaneous power crest is 200 kW, so the series inductance has to be tiny:
+This is 3 times the revision A value and comfortably buildable with the
+transformer leakage as the only inductor (583 nH leakage plus an estimated
+60 nH of bus stray). Below 120 V the phase shift is allowed to rise to 0.35,
+which gives 429 A (36 kW) at 85 V.
 
-    f * L_total  <=  7.2e-3 ohm      (D = 0.25 at 100 kW, 85 V, leaving 33 % headroom)
+## 4. Semiconductors, sized thermally
 
-That is 103 nH at 70 kHz for the whole converter. It is not buildable as one
-transformer, so the power stage is split into **4 parallel cells of 387 nH
-each**, with the transformer leakage used as the DAB inductor (no separate
-inductor). Consequences that drive the rest of the design:
+The earlier module choice was driven by loss, not by any current rating, and
+left about 45 K of unused junction headroom. This revision sizes each switch
+position so the junction ends the 10 s event at or below 125 C, with on-resistance
+evaluated at that temperature. The devices are rated 175 C; 125 C leaves
+margin for the estimated thermal data.
 
-* Higher frequency needs proportionally lower inductance. The bus and
-  termination inductance (estimated 60 nH) does not shrink, so frequency is
-  capped by construction, not by the ferrite.
-* At 10 kW the same inductance makes the phase shift very small (48-280 ns).
-  Timing resolution, not loss, becomes the light-load concern.
-* Transformer flux is set by voltage, not current. A 10x overload therefore
-  costs copper heating only, and the transformer can be sized for 10 kW
-  thermally with an adiabatic check for the 10 s peak.
+One caution on what "thermal capacity" buys. Ten seconds is long compared with
+a SiC die and package (well under one second), so the junction-to-case rise
+reaches steady state during the event. The thermal mass that helps is the
+heatsink: it is sized to rise 15 K during the event (5.1 kg of aluminium)
+instead of being sized to remove 7 kW continuously.
 
-## 4. Semiconductors
+1200 V devices are kept because the link has no bulk capacitor and line surges
+reach the switches clamped only by the MOVs. GaN remains unsuitable for the
+same reason.
 
-**1200 V SiC MOSFET half-bridge modules throughout.** The link has no bulk
-capacitor, so a line surge reaches the switches clamped only by the MOVs (about
-800-850 V for 320 Vac-class parts). That rules out 650 V devices. GaN was
-rejected for three reasons: 650 V rating with no avalanche capability, no
-commercially available parts at 350 A rms per switch, and no benefit at 70 kHz
-where switching loss is already minor.
+HF bridge options at 70 kHz (unfolder fixed, whole-block cost shown):
 
-Cell-count study at the worst corner (100 kW, 85 V), 50 kHz:
+| Cells | Per switch position | Peak Tj | Block cost | Note |
+|---|---|---|---|---|
+| 1 | one 1.33 mohm module leg | 122 C | $13.5k | 321 nH single transformer |
+| 1 | one 2.6 mohm module leg | 231 C | - | fails |
+| 2 | one 2.6 mohm module leg | 107 C | $13.4k | |
+| 2 | one 1.33 mohm module leg | 90 C | $21.8k | rev A style |
+| 1 | 9 x 16 mohm TO-247 | 124 C | $8.6k | cheapest that passes |
+| **2** | **5 x 16 mohm TO-247** | **115 C** | **$9.6k** | **selected** |
+| 2 | 4 x 16 mohm TO-247 | 138 C | $8.4k | passes only at a 150 C limit |
 
-| Module class | Cells | HF modules | Loss at 85 V | Loss at 240 V | Peak Tj |
-|---|---|---|---|---|---|
-| 1.33 mohm (62 mm, CAB760M12HM3 class) | 3 | 12 | 13.1 kW | 1.44 kW | 107 C |
-| **1.33 mohm** | **4** | **16** | **11.4 kW** | **1.32 kW** | **106 C** |
-| 1.33 mohm | 6 | 24 | 9.9 kW | 1.24 kW | 105 C |
-| 2.6 mohm (CAB450M12XM3 class) | 6 | 24 | 12.6 kW | 1.39 kW | 107 C |
-| 2.6 mohm | 10 | 40 | 9.6 kW | 1.36 kW | 105 C |
+Two cells is chosen over the slightly cheaper single cell: it doubles the
+leakage target, allows one cell to be shed at light load, interleaves the link
+ripple, and leaves a working cell if one fails.
 
-Four cells of the 1.33 mohm class is the knee: fewer cells pushes the per-cell
-inductance to 400 nH and below at 50 kHz, more cells buys little. Selected
-complement:
+Unfolder options (line-frequency, 500 A):
 
-| Function | Modules | Notes |
+| Per switch position | Peak Tj | Cost (8 positions) |
 |---|---|---|
-| HF bridges | 16 (4 cells x 2 bridges x 2 legs) | 358 A rms per cell at the peak corner |
-| Unfolders | 8 (2 ports x 2 legs x 2 in parallel) | Line-frequency switching, synchronous conduction, 832 A rms per leg |
+| 6 x 16 mohm TO-247 | 147 C | $1.8k |
+| **8 x 16 mohm TO-247** | **113 C** | **$2.4k** |
+| one 2.6 mohm module leg | 159 C | $3.4k |
+| one 1.33 mohm module leg | 104 C | $7.6k |
 
-Peak junction temperature is about 106 C against a 175 C rating, so there is
-real thermal margin. A third parallel unfolder module per leg would cut the
-85 V peak loss by about 1.8 kW if that corner's efficiency matters.
+Selected complement: 80 discretes in the HF bridges and 64 in the unfolders,
+144 in total, about $5.5k. Paralleling five TO-247 parts in a 70 kHz
+soft-switched bridge is established practice but needs a symmetric layout and
+individual gate resistors. The unfolders switch at 60 Hz, so paralleling there
+is easy.
 
-Soft switching: the transformer is gapped to 30 uH magnetising inductance so
-that about 48 A of magnetising current is available at the 403 V crest. That
-gives zero-voltage turn-on over 99-100 % of the line cycle at every load,
-independent of the load current. Dead time 200 ns.
+The cost of thermal sizing is efficiency during the surge: 6-7.6 kW is
+dissipated at the worst points, where revision A's oversized modules would have
+lost about half that.
+
+If the full 100 kW were required at 120 V, current rises to 833 A. Loss scales
+with current squared, so the device count rises by roughly 2.8 times (about
+$15k of switches) and the inductance target falls to about 385 nH per cell.
 
 ## 5. Switching frequency evaluation
 
-Four cells, 1.33 mohm modules, transformer re-optimised at each frequency:
+Selected hardware, transformer re-optimised at each frequency:
 
-| f | L per cell | Transformer (per cell) | Mass per cell | Eff. 10 kW, 240 V | Eff. 10 kW, 85 V | Loss 100 kW, 85 V | Phase shift at 10 kW, 240 V |
+| f | L per cell | Transformer (per cell) | Mass | Eff. 10 kW, 240 V | Eff. 10 kW, 85 V | Worst peak loss | Peak Tj |
 |---|---|---|---|---|---|---|---|
-| 50 kHz | 542 nH | 2x E100/60/28, 7 turns | 2.88 kg | 98.97 % | 97.95 % | 11.39 kW | 95 ns |
-| **70 kHz** | **387 nH** | **2x E100/60/28, 6 turns** | **2.87 kg** | **98.87 %** | **97.75 %** | **11.25 kW** | **68 ns** |
-| 100 kHz | 271 nH | 2x E100/60/28, 5 turns | 2.49 kg | 98.73 % | 97.47 % | 11.56 kW | 47 ns |
-| 140 kHz | 194 nH | 2x E100/60/28, 4 turns | 2.35 kg | 98.51 % | 97.11 % | 11.74 kW | 34 ns |
-| 200 kHz | 135 nH | 2x E100/60/28, 4 turns | 2.33 kg | 98.23 % | 96.52 % | 12.25 kW | 24 ns |
-| 300 kHz | 90 nH | 2x E100/60/28, 3 turns | 2.19 kg | 97.83 % | 95.84 % | 12.93 kW | 16 ns |
+| 50 kHz | 900 nH | 2x E100/60/28, 6 turns | 2.64 kg | 98.70 % | 96.36 % | 7.30 kW | 114 C |
+| **70 kHz** | **643 nH** | **2x E100/60/28, 7 turns** | **2.67 kg** | **98.77 %** | **96.19 %** | **7.60 kW** | **115 C** |
+| 100 kHz | 450 nH | 2x E100/60/28, 6 turns | 2.66 kg | 98.68 % | 96.06 % | 7.64 kW | 117 C |
+| 140 kHz | 321 nH | 2x E100/60/28, 5 turns | 2.51 kg | 98.56 % | 95.84 % | 7.82 kW | 119 C |
+| 200 kHz | 225 nH | 2x E100/60/28, 4 turns | 2.36 kg | 98.37 % | 95.51 % | 8.12 kW | 122 C |
+| 300 kHz | 150 nH | 2x E100/60/28, 3 turns | 2.22 kg | 98.16 % | 94.96 % | 8.65 kW | 127 C |
 
 ![Frequency sweep](img/frequency_sweep.png)
 
-Findings:
+The conclusion is the same as before, and flatter. The transformer is sized by
+current and leakage, not flux, so it loses only 17 % of its mass between 50 and
+300 kHz while efficiency and junction margin both get worse. 50 to 100 kHz is
+effectively a tie. **70 kHz is retained**: both the fundamental and the 140 kHz
+link ripple stay below the 150 kHz start of the FCC conducted band, and it sits
+clear of the 50 kHz floor.
 
-* **Raising frequency buys almost nothing here.** The transformer is sized by
-  current and by the leakage target, not by flux, so mass falls only 24 % from
-  50 to 300 kHz while efficiency falls by more than a point. Gate-drive loss on
-  these large modules (29 W per active cell at 70 kHz) and turn-off loss both
-  scale with frequency.
-* Above about 140 kHz the required inductance falls under 200 nH per cell.
-  With 60 nH of unavoidable stray that leaves no tolerance, and the 10 kW phase
-  shift drops to the order of gate-driver skew.
-* 50 and 70 kHz are within 0.2 points of each other.
+## 6. Transformer (one per cell, two per block)
 
-**Selected: 70 kHz.** It keeps margin above the 50 kHz floor, puts both the
-fundamental and the 140 kHz link ripple below the 150 kHz start of the FCC
-conducted band, and shortens the control delay by 30 % relative to 50 kHz,
-which directly reduces the link capacitance needed for stability. The cost is
-about 0.1 points of efficiency.
-
-## 6. Transformer (one per cell, four total)
-
-Found by exhaustive search over 6 core shapes, 1-4 stacked sets, 1-12 turns,
-interleaving, three litz strand sizes and copper build. The objective is mean
-continuous loss across the voltage range plus 4 W per kg, subject to a 55 K
-rise, a 30 K adiabatic rise in the 10 s peak, flux below 280 mT at +10 % line,
-and the leakage inductance landing on target with at least a 1 mm reinforced
-barrier.
+Exhaustive search over 6 core shapes, 1-4 stacked sets, 1-12 turns,
+interleaving, three litz strand sizes and copper build. Objective: mean
+continuous loss across the voltage range plus 4 W per kg. Constraints: 55 K
+steady rise with one cell carrying the full 10 kW, 30 K adiabatic rise in the
+10 s peak, flux under 280 mT at +10 % line, and leakage on target with at least
+a 1 mm reinforced barrier.
 
 | Parameter | Value |
 |---|---|
 | Core | 2 stacked sets E100/60/28, MnZn power ferrite (N87 data used; N97/3C97 would be 15-25 % lower loss) |
-| Effective area / volume | 1476 mm^2 / 404 cm^3 |
-| Turns | 6 : 6 |
-| Winding arrangement | P/2 - S - P/2 (two primary-secondary interfaces) |
-| Conductor | Litz, 36.7 mm^2 copper per turn, 0.05 mm strands (about 18 700; built as parallel bundles) |
-| Primary-secondary barrier | 3.4 mm per interface, sets the leakage |
-| Leakage inductance | 327 nH (plus 60 nH stray = 387 nH) |
-| Magnetising inductance | 30 uH, total core gap about 2.2 mm |
-| Peak flux | 163 mT at 285 V, 179 mT at +10 % |
-| Mass | 2.87 kg (1.96 kg ferrite, 0.91 kg copper) |
-| Continuous loss, one cell carrying 10 kW | 35 W at 85 V, 22 W at 120-208 V, 25 W at 240 V, 33 W at 285 V |
-| Steady temperature rise | 24 K (forced air, 22 W/m^2K) |
-| Peak-corner copper loss | 245 W per transformer, 7 K adiabatic rise in 10 s |
-| AC resistance factor | 1.26 at 10 kW / 85 V, 1.09 at the peak |
+| Turns | 7 : 7 |
+| Winding arrangement | P/2 - S - P/2 |
+| Conductor | Litz, 24.2 mm^2 copper per turn, 0.05 mm strands (about 12 300, as parallel bundles) |
+| Primary-secondary barrier | 5.5 mm per interface, sets the leakage |
+| Leakage inductance | 583 nH |
+| Magnetising inductance | 72 uH, core gap about 1.3 mm (provides soft switching at all loads) |
+| Peak flux | 139 mT at 285 V, 153 mT at +10 % |
+| Mass | 2.67 kg (1.96 kg ferrite, 0.71 kg copper) |
+| Loss, one cell carrying 10 kW | 58 W at 85 V, 30 W at 120 V, 19-24 W at 208-285 V |
+| Steady temperature rise | 39 K (forced air) |
+| Peak copper loss | 308 W per transformer, 11 K adiabatic rise in 10 s |
 
-Core loss benefits from the AC link: flux follows the line envelope, so the
-loss averaged over a line cycle is about 45 % of the value at the crest.
+Flux is set by voltage, not current, so the 10x surge cannot saturate the core;
+it only heats the copper. The 5.5 mm barrier is generous for reinforced
+insulation and its thickness is the leakage trim; plan one prototype iteration.
 
-Construction notes. The barrier doubles as the leakage-setting spacer, so its
-thickness needs a +/-0.2 mm tolerance; plan one prototype iteration to trim
-it. Keep the winding 3 mm or more clear of the core gap, or split the gap, to
-limit fringing loss. Use an insulation system recognised to UL 1446 class F or
-better, with two embedded temperature sensors per transformer.
+## 7. Control, power reversal and transformer-like behaviour
 
-## 7. Control and unannounced power reversal
+Each cell uses single-phase-shift modulation. Twice per switching period:
 
-Each cell uses plain single-phase-shift modulation. Because the conversion
-ratio is always 1, more elaborate modulation schemes offer nothing.
-
-**Virtual-transformer law.** Twice per switching period the controller samples
-both link voltages and both port currents and sets
-
-    i_ref = (i_port1 + i_port2) / 2  +  Kp * (v_link1 - v_link2)  +  Ki * integral(v_link1 - v_link2)
+    i_ref = (i_port1 + i_port2) / 2  +  Kp * e  +  Ki * integral(e)
+    e     = (v_link1 - v_link2) - Zv * i          (Zv = programmable virtual impedance)
     D     = solve  D * (1 - |D|) = i_ref * 2 * f * L / (n_active * v_mean)
 
-D is signed. There is no mode, no direction flag and no source/load
-designation. If the far side starts pushing power back, the voltage error and
-the current feed-forward change sign and D follows through zero within one
-sample (7 us). A DAB on its own behaves as a gyrator, which resonates with
-small link capacitors; averaging the two port currents in the feed-forward
-cancels that and makes the pair of links behave like one capacitor behind an
-ideal transformer.
+D is signed, and there is no direction flag or source/load designation. When
+the far side starts pushing power back, the error and the feed-forward change
+sign and D follows through zero within one 7 us sample. Averaging both port
+currents in the feed-forward cancels the gyrator behaviour a DAB has on its
+own, so the two links act like one capacitor behind an ideal transformer.
 
-Simulated with one sample of computation delay, 80 uF per link, both ports
-modelled as sources behind damped filter inductance, and the far-side source
-jumping at the line crest so that steady-state power reverses:
+Simulated with one sample of delay, 40 uF per link, Zv = 0, both ports as
+sources behind damped filter inductance, far-side source jumping at the line
+crest so that steady-state power reverses:
 
-| Event | Port mismatch before | Worst mismatch after |
+| Event | Mismatch before | Worst mismatch after |
 |---|---|---|
-| 240 V, +10 kW to -10 kW, 1 cell | 0.06 V | 7.6 V (2.2 % of crest) |
-| 85 V, +10 kW to -10 kW, 2 cells | 0.19 V | 16.5 V (13.8 %) |
-| 240 V, +100 kW to -100 kW, 4 cells | 0.6 V | 35.9 V (10.6 %) |
-| 85 V, +100 kW to -100 kW, 4 cells | 5.3 V | 57.9 V (48 %) |
+| 240 V, +10 kW to -10 kW, 1 cell | 0.1 V | 9.9 V (2.9 % of crest) |
+| 85 V, +10 kW to -10 kW, 2 cells | 0.5 V | 20 V (17 %) |
+| 240 V, +100 kW to -100 kW, 2 cells | 0.7 V | 43 V (12.6 %) |
+| 120 V, +60 kW to -60 kW, 2 cells | 3.1 V | 31 V (18 %) |
 
 ![Power reversal](img/reversal.png)
 
-The reversal itself disturbs the voltage by only a few volts. The worst
-mismatch in every case is a sub-millisecond notch at the following zero
-crossing, where current that is out of phase with the voltage has to be carried
-through the unfolder flip. The 85 V / 100 kW case is stable but coarse and
-needs a source impedance of 8 uH or less per port; treat that corner as
-"survives and keeps transferring power", not as clean power quality.
+The reversal itself moves the voltage by a few volts. The worst mismatch is a
+sub-millisecond notch at the next zero crossing, where out-of-phase current is
+carried through the unfolder flip. All cases are stable with 40 uF; 20 uF also
+ran stable but with less margin.
 
-**Link capacitance: 80 uF per side** (20 uF of film per cell). 40 uF was
-unstable at 100 kW below about 150 V. The price is leading reactive current
-drawn by each port even at no load: 8.6 A (2.4 kvar) at 285 V, 7.2 A at 240 V,
-3.6 A at 120 V. At 10 kW and 285 V the source sees a power factor of about
-0.90. This is a direct consequence of the 100 kW low-line requirement.
+The 40 uF links draw leading reactive current at no load: 4.3 A at 285 V,
+3.6 A at 240 V, 1.8 A at 120 V per port. That is half the revision A figure.
 
-Other control functions:
+**How it compares with an iron transformer under surge**
 
-* **Cell shedding.** One cell runs at 10 kW for 208 V and above, two below.
-  All four are enabled when demand exceeds a threshold; enabling takes one
-  switching period because the links are common.
-* **Interleaving.** Active cells are phase-staggered so link ripple is at
-  2 x n x 70 kHz.
-* **Current limit.** `i_ref` is clamped. Beyond the clamp the unit becomes a
-  current source and lets the port voltages separate, which is the correct
-  response to a far-side fault or sag.
-* **Flux balance.** Magnetising current is sensed per cell and volt-second
-  imbalance trimmed; the 2.2 mm gap gives tolerance to residual offset.
-* **Hardware.** FPGA or a C2000-class MCU with 150 ps high-resolution phase
-  control. Static gate-driver skew is absorbed by the integral term.
+| | 10 kVA iron-core | This block |
+|---|---|---|
+| Series impedance | Fixed, typically 2-4 % | `Zv`, programmable; default 3 % at 10 kW |
+| Voltage sag at 10x load | Roughly 20-40 % | Set by `Zv`; can be made non-linear to hold sag lower |
+| Surge limit | Thermal, tens of times rated for cycles | 500 A hard limit for 10 s, then foldback to continuous |
+| Fault current | 25-50x rated | 500 A: 12x rated at 240 V, 6x at 120 V |
+| Inrush on energising | 8-12x rated | None |
+| No-load loss | 50-100 W, constant | About 55 W, one cell shed |
 
-## 8. Predicted performance at 70 kHz
+The fault-current row matters for protection coordination. Breakers and fuses
+downstream that rely on a transformer's high fault current to trip
+instantaneously will see at most 500 A per block and must be chosen for that.
 
-| Vrms | 10 kW: cells / loss / efficiency | 2.5 kW efficiency | 100 kW: loss / efficiency | Peak Tj |
+Other control functions: cell shedding (one cell above about 208 V at 10 kW and
+below 2.5 kW everywhere), interleaving, magnetising-current flux balancing, and
+a hard clamp on `i_ref` that turns the block into a current source during a
+far-side fault. Controller: FPGA or a C2000-class MCU with 150 ps phase
+resolution.
+
+## 8. Predicted performance, isolated block at 70 kHz
+
+| Vrms | 10 kW: cells / loss / efficiency | 2.5 kW efficiency | 10 s peak: power / loss / efficiency | Peak Tj (HF / unfolder) |
 |---|---|---|---|---|
-| 85 | 2 / 225 W / 97.75 % | 96.85 % | 11.25 kW / 88.75 % | 106 C |
-| 120 | 2 / 167 W / 98.33 % | 97.02 % | 4.89 kW / 95.11 % | 84 C |
-| 208 | 1 / 116 W / 98.84 % | 96.82 % | 1.71 kW / 98.29 % | 71 C |
-| 240 | 1 / 113 W / 98.87 % | 96.63 % | 1.37 kW / 98.63 % | 69 C |
-| 285 | 1 / 115 W / 98.85 % | 96.28 % | 1.09 kW / 98.91 % | 68 C |
+| 85 | 2 / 381 W / 96.19 % | 96.90 % | 36.5 kW / 6.2 kW / 83.1 % | 111 / 104 C |
+| 120 | 2 / 223 W / 97.77 % | 97.44 % | 60 kW / 7.6 kW / 87.3 % | 115 / 113 C |
+| 208 | 2 / 130 W / 98.70 % | 97.59 % | 100 kW / 6.3 kW / 93.7 % | 106 / 111 C |
+| 240 | 1 / 123 W / 98.77 % | 97.51 % | 100 kW / 4.6 kW / 95.5 % | 99 / 102 C |
+| 285 | 1 / 112 W / 98.88 % | 97.31 % | 100 kW / 3.2 kW / 96.8 % | 93 / 95 C |
 
-![Efficiency](img/efficiency.png)
-
-At the 85 V peak the loss splits as unfolders 5.3 kW, HF bridge conduction
-3.9 kW, transformer copper 1.0 kW, switching 0.5 kW, bus and filter 0.4 kW.
-The 10 s event deposits about 113 kJ. A 14 kg aluminium heatsink absorbs the
-semiconductor share with an 8 K rise, so the cooling system only needs to be
-sized for the continuous loss (under 250 W) plus recovery between peaks.
-Light-load efficiency is held down by about 65 W of fixed loss (gate drive and
-auxiliaries).
-
-The closed-form waveform model was checked against a time-stepped switched
-simulation: 100.2 kW simulated for 100 kW set, 358.2 A against 358.0 A rms.
+Soft switching holds over the whole line cycle at every point. The closed-form
+waveform model was checked against a time-stepped switched simulation
+(60.12 kW simulated for 60 kW set; 304.5 A against 304.3 A rms).
 
 ![Waveforms](img/waveforms.png)
 
-## 9. Compliance and instrumentation
+## 9. Non-isolated variant
+
+With a 1:1 ratio and no isolation there is nothing left to transform: the
+ideal non-isolated "transformer" is a wire. What a power-electronic block can
+still usefully do in that position is switch, limit and trim. The proposal is a
+**bidirectional SiC AC switch in series with the line plus a smaller shunt
+freewheel switch**, operated as an AC chopper at a duty near 1.
+
+| | Isolated DAB block | Non-isolated block |
+|---|---|---|
+| Functions | Isolation, independent grounding, current limit, fast disconnect, power-flow control | Current limit, fast disconnect, soft connection, a few per cent of voltage trim |
+| Switches in the current path | 8 | 2 |
+| Discrete devices | 144 | 26 |
+| Magnetics | Two 2.7 kg ferrite transformers | One small chopper inductor |
+| Loss at 10 kW, 240 V | 123 W (98.77 %) | 38 W (99.6 %) |
+| Loss at 10 kW, 85 V | 381 W | 90 W |
+| Peak loss (500 A) | up to 7.6 kW | 1.3 kW |
+| Estimated cost | $9.6k | $3.2k |
+| Estimated volume | 42 L | 20 L |
+| Estimated mass | 26 kg | 14 kg |
+
+So dropping isolation saves about two thirds of the cost and half the volume
+and mass, and cuts loss by a factor of three to five. What it gives up is the
+ability to ground the two sides independently, to connect them differently in a
+three-phase bank (for example delta on one side and wye on the other), and to
+block common-mode voltage and DC between the sides. If none of those are needed
+at a given site, the non-isolated block is the better engineering choice. The
+two could share the control board, sensing, enclosure format and telemetry.
+
+## 10. Size of one block and of a three-phase bank
+
+Isolated block roll-up:
+
+| Item | Cost | Volume | Mass |
+|---|---|---|---|
+| HF bridge switches (80) | $3,040 | 1.3 L | 0.6 kg |
+| Unfolder switches (64) | $2,432 | 0.9 L | 0.3 kg |
+| Gate drives | $600 | - | 0.3 kg |
+| Transformers (2) | $900 | 3.1 L | 5.3 kg |
+| Link capacitors | $56 | 0.3 L | 0.3 kg |
+| Heatsink and fans | $141 | 6.4 L | 5.6 kg |
+| EMI filters (2 ports) | $700 | 4.0 L | 6.0 kg |
+| Contactors, fuses, surge | $500 | 1.6 L | 2.4 kg |
+| Sensing, control, aux supply | $550 | 1.2 L | 0.8 kg |
+| Busbars, PCBs, enclosure | $700 | - | 4.0 kg |
+| **Total** | **$9.6k** | **18.8 L of parts, 42 L enclosed** | **26 kg** |
+
+The enclosed volume assumes parts fill 45 % of the enclosure. 42 L is roughly a
+440 x 480 x 200 mm chassis. For comparison, a 10 kVA encapsulated iron-core
+transformer is in the region of 55-65 kg and 30-40 L (from memory, not checked
+against a catalogue). The block is therefore about half the weight and similar
+in volume. The heatsink and the two EMI filters, not the magnetics, set its
+size; a tighter mechanical design could plausibly reach 30 L.
+
+| Configuration | Continuous | 10 s peak | Isolated | Non-isolated |
+|---|---|---|---|---|
+| One block (single phase) | 10 kW | 100 kW | 42 L, 26 kg, $9.6k | 20 L, 14 kg, $3.2k |
+| Three-phase bank (3 blocks) | 30 kW | 300 kW | 144 L, 83 kg, $29k | 70 L, 45 kg, $9.7k |
+| Three-phase, 5 in parallel (15 blocks) | 150 kW | 1.5 MW | 720 L, 415 kg, $144k | 349 L, 227 kg, $49k |
+
+Multi-block figures include 15 % volume and 8 % mass for a common frame.
+
+**Three-phase connection.** Three blocks connected line-to-neutral serve
+120/208 V directly. Line-to-line connection serves 208 V and 240 V delta. On
+277/480 V the line-to-neutral voltage is 277 V, which is inside the range only
+with 3 % headroom; if that service matters, the upper limit should be raised to
+305 V. The devices and the transformer flux already allow it. Because each
+block has no energy storage, the three pulsating phase powers sum to constant
+power at the bank terminals, as in a transformer bank.
+
+## 11. Paralleling: five blocks per phase
+
+Five blocks per phase give 50 kW continuous and 500 kW for 10 s per phase, with
+2500 A available at 200 V and above.
+
+* **Sharing.** Transformers in parallel share in inverse proportion to their
+  impedance. The blocks do the same through `Zv`: with equal `Zv` they share
+  equally with no communication, and a slow trim over CAN removes residual
+  sensor error. Without `Zv` the integral terms of paralleled blocks would
+  fight, so it is mandatory in parallel operation. This has not been simulated
+  yet and is the first thing to verify.
+* **Block shedding.** At light load whole blocks go idle with their contactors
+  closed and bridges off. A 150 kW bank at 10 % load runs two blocks per phase
+  near their best efficiency instead of fifteen at their worst.
+* **Redundancy.** Each block has its own contactors, fuses and protection. A
+  failed block opens itself; four remaining blocks still give 40 kW continuous
+  and 400 kW peak per phase.
+* **Synchronisation.** A shared sync line staggers the switching phases across
+  blocks, which cancels link ripple and lowers the combined conducted emission.
+  A block that loses sync keeps running on its own clock.
+* **Unfolder polarity.** Each block decides polarity from its own port
+  voltages; all blocks see the same ports, so they agree. A mismatch lasting
+  more than one sample would short two links together through the unfolders,
+  so a hardware interlock on the shared sync line is needed.
+* **Reactive current.** Link-capacitor current adds: 18 A leading per phase per
+  side at 240 V with all five energised. Idle blocks can open their contactors
+  to remove it.
+* **Bus work.** 2500 A for 10 s per phase sets the collector bus and the
+  upstream protection, not the blocks.
+* **Physical.** 15 isolated blocks at 42 L are 630 L of chassis, 720 L framed:
+  one 800 mm wide, 2 m tall cabinet if air paths allow, more comfortably two.
+  Non-isolated, the same bank fits in half of one.
+
+## 12. Compliance and instrumentation
 
 **Safety (UL).** The governing standard depends on end use and should be fixed
-with the NRTL at the start: UL 1741 (with IEEE 1547) if either port is a
-utility interconnection with generation or storage behind it, otherwise UL 1012
-or UL 508-family industrial equipment standards. Design provisions common to
-all of them:
+with the test laboratory at the start: UL 1741 with IEEE 1547 if either port is
+a utility interconnection with generation or storage behind it, otherwise
+UL 1012 or UL 508-family industrial standards. Common provisions:
 
-* Reinforced insulation port to port: transformer barrier, 8 mm creepage and
-  clearance across the isolation boundary on PCBs and busbars, reinforced-rated
-  gate drivers, sensors and communication isolators.
-* UL 1446 insulation system in the transformer, UL 94 V-0 plastics, recognised
-  film capacitors (X-class where across the line), listed fuses and contactors
+* Isolated variant: reinforced insulation port to port (transformer barrier,
+  8 mm creepage and clearance across the boundary, reinforced-rated gate
+  drivers, sensors and isolators); UL 1446 insulation system in the
+  transformer. The non-isolated variant needs none of this but must then be
+  evaluated as non-isolated equipment, with both ports treated as one circuit.
+* UL 94 V-0 plastics, recognised film capacitors, listed fuses and contactors
   on both ports.
-* Surge: MOVs with thermal disconnect on each port, plus an active clamp on
-  each link, coordinated with the 1200 V device rating.
-* Independent hardware protection that does not rely on firmware: desaturation
-  detection on every switch (under 2 us), link over-voltage comparators,
-  over-temperature cut-outs, and a watchdog that opens the port contactors.
-* Because either port can be live, both are treated as sources: discharge of
-  the links below 60 V within the required time after disconnection, and
+* MOVs with thermal disconnect on each port and an active clamp on each link,
+  coordinated with the 1200 V device rating.
+* Protection independent of firmware: desaturation or shunt-based short-circuit
+  detection on every switch position (under 2 us), link over-voltage
+  comparators, over-temperature cut-outs, watchdog opening the contactors.
+* Both ports are treated as sources: link discharge after disconnection and
   warning labels on both sides.
 
-**Emissions (FCC Part 15 Subpart B, Class A assumed for industrial use;
-Class B if residential).** Two-stage common-mode and differential-mode filter
-on each port, with damping, since the damping is also needed for control
-stability. Low-inductance laminated bus, a grounded electrostatic shield
-between transformer windings to cut common-mode current, controlled gate
-resistance, and a fully shielded enclosure. The 1663 A peak sets the filter
-inductor size; use nanocrystalline common-mode cores and keep differential
-inductance at or below 8 uH per port.
+**Emissions (FCC Part 15 Subpart B, Class A assumed; Class B if residential).**
+Two-stage damped common-mode and differential-mode filter on each port,
+laminated low-inductance bus, grounded electrostatic shield between transformer
+windings, controlled gate resistance, shielded enclosure. Filters must not
+saturate at 707 A peak.
 
 **Instrumentation.**
 
 | Quantity | Where | Method |
 |---|---|---|
-| Voltage | Both ports, both links | Reinforced-isolated delta-sigma modulators |
-| Current | Both ports (2 kA class), each cell's transformer primary | Closed-loop Hall or fluxgate on ports, Rogowski or CT per cell |
-| Temperature | Every module NTC, 2 per transformer, heatsink, link capacitors, inlet and outlet air | NTC / PT1000 |
-| Power | Per port | Computed: P, Q, S, power factor, direction, energy in each direction |
-| State | Active cells, phase shift, limits, faults, event log with pre-trigger waveform capture | Controller |
+| Voltage | Both ports, both links | Isolated delta-sigma modulators |
+| Current | Both ports (1 kA class), each cell's transformer primary | Closed-loop Hall or fluxgate on ports, Rogowski or CT per cell |
+| Temperature | Each paralleled device group, 2 per transformer, heatsink, link capacitors, inlet and outlet air | NTC / PT1000 |
+| Power | Per port | P, Q, S, power factor, direction, energy in each direction |
+| State | Active cells, phase shift, `Zv`, share of bank current, limits, faults, event log with pre-trigger waveforms | Controller |
 
-Telemetry is published over isolated CAN FD and Ethernet (Modbus TCP, or MQTT
-over TLS) at 10 Hz, with faults pushed immediately. Remote access is read-only
-by default; setpoint and firmware changes require authentication. The CAN side
-can share a bus with the battery-management code already in this repository.
+Published over isolated CAN FD (also used for bank sharing trim) and Ethernet
+(Modbus TCP, or MQTT over TLS) at 10 Hz, faults pushed immediately. Remote
+access is read-only by default. The CAN side can share a bus with the
+battery-management code already in this repository.
 
-## 10. What the 85 V / 100 kW corner costs
+## 13. Open items
 
-That single corner sets 24 large SiC modules, the 80 uF links and their
-reactive current, and the 1663 A filter. If the 100 kW peak were only required
-above roughly 200 V, with a constant-current limit below, peak current falls
-from 1176 A to about 500 A rms. By estimate (not modelled), that is two cells
-and single unfolder modules, about half the semiconductor count, and 40 uF
-links. Worth confirming before committing.
-
-A related alternative: operating the same hardware as a series-resonant
-converter at fixed frequency makes it an open-loop "DC transformer" whose
-output follows its input without fast control. It gives up the current
-limiting and power-flow control that a DAB provides, so it was not adopted,
-but it is the fallback if the low-line dynamics in section 7 prove too coarse.
-
-## 11. Open items
-
-1. **Device data.** On-resistance (1.33 mohm typ, 1.73 max) and gate charge are
-   from vendor listings. Thermal resistance, output charge, temperature
-   coefficient and fall time are estimates; the vendor's datasheet site was not
-   reachable from the design environment. Re-run with datasheet values.
-2. **Core data.** Core dimensions are catalogue-nominal from memory. Ferrite
-   loss uses two verified N87 datasheet points and two estimated ones.
-3. **Leakage inductance** is from a one-dimensional formula, good to perhaps
-   +/-20 %. Confirm with finite-element analysis and a prototype.
-4. **Litz construction.** 18 700 strands of 0.05 mm per turn is costly. 0.071 mm
-   strand is a small efficiency penalty and should be priced.
-5. **Control model** is averaged, with ideal sensing and an ideal PLL for the
-   unfolder polarity. Validate in a switched circuit simulator including
-   dead time, cell-to-cell inductance mismatch and current sharing.
-6. **Reactive and non-linear loads at the peak** are only partly covered; the
-   zero-crossing notch grows with out-of-phase current.
-7. **Semiconductor cost** is substantial (24 modules). Section 10 is the lever.
-8. Recommended first hardware step: one 25 kW cell with both bridges, tested
-   DC-DC at 120 V and 400 V links before the unfolders are added.
+1. **Device data.** The 16 mohm discrete and both module entries use estimated
+   thermal resistance, output charge, temperature coefficient and fall time;
+   the vendor datasheet site was not reachable from the design environment.
+   Case-to-sink resistance for an isolated TO-247 mounting (0.45 K/W assumed)
+   has a large effect on the device count and must be confirmed.
+2. **Prices, volumes and masses** are my estimates. The ratios between options
+   are more reliable than the absolute figures.
+3. **Iron-transformer comparison figures** are from memory.
+4. **Core dimensions** are catalogue-nominal from memory; ferrite loss uses two
+   verified N87 datasheet points and two estimated ones.
+5. **Leakage inductance** is from a one-dimensional formula, good to perhaps
+   +/-20 %. Confirm by finite-element analysis and a prototype.
+6. **Parallel operation and `Zv` droop** are designed but not simulated.
+7. **Control model** is averaged with ideal sensing. Validate in a switched
+   circuit simulator including dead time, device-to-device current sharing and
+   cell mismatch.
+8. **Reactive and non-linear loads** during the surge are only partly covered;
+   the zero-crossing notch grows with out-of-phase current.
+9. **Protection coordination** with the 500 A fault-current ceiling needs a
+   site-level study.
+10. Recommended first hardware step: one cell (both bridges and a transformer)
+    tested DC-DC at 170 V and 400 V links, including a 10 s, 300 A thermal run,
+    before the unfolders are added.

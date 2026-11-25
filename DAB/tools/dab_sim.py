@@ -22,7 +22,7 @@ import dab_design as dd
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "img")
 F_SW = 70e3
-N_CELLS = 4
+N_CELLS = 2
 L_CELL = dd.l_cell_required(F_SW, N_CELLS)
 
 
@@ -63,8 +63,8 @@ def phasor_for_power(v_rms, p, z):
     return v_rms - (p / v_rms) * z
 
 
-def reversal(v_rms, p_before, p_after, n_active, c_link=80e-6, l_f=30e-6, r_f=10e-3, r_d=1.0,
-             kp=1.2, i_lim=None, e2_scale_after=None, plot_ax=None, label=""):
+def reversal(v_rms, p_before, p_after, n_active, c_link=40e-6, l_f=30e-6, r_f=10e-3, r_d=1.0,
+             kp=0.6, i_lim=None, e2_scale_after=None, plot_ax=None, label=""):
     """
     Both ports are EMFs behind a damped filter inductance (l_f + r_f, with r_d
     in parallel).  The link capacitors sit on the DC side of the unfolders and
@@ -157,7 +157,7 @@ def main():
     print(f"Selected: {F_SW/1e3:.0f} kHz, {N_CELLS} cells, L per cell = {L_CELL*1e9:.0f} nH\n")
     fig, ax = plt.subplots(1, 2, figsize=(12, 4))
     print("A. switched-waveform check (quarter line cycle, by symmetry)")
-    for (v, p, n), a in zip(((85, 100e3, 4), (240, 10e3, 1)), ax):
+    for (v, p, n), a in zip(((120, 60e3, 2), (240, 10e3, 1)), ax):
         r = switched_check(v, p, n, a)
         print(f"  {v:>3} V  set {r['p_set']/1e3:6.1f} kW  simulated {r['p_sim']/1e3:6.2f} kW   "
               f"Irms/cell model {r['i_rms_model']:6.1f} A  simulated {r['i_rms_sim']:6.1f} A   D = {r['d']:.4f}")
@@ -168,10 +168,10 @@ def main():
     fig, ax = plt.subplots(1, 3, figsize=(16, 4.2))
     cases = [
         dict(v_rms=240, p_before=10e3, p_after=-10e3, n_active=1, label="240 V: +10 kW -> -10 kW, 1 cell"),
-        dict(v_rms=240, p_before=100e3, p_after=-100e3, n_active=4, l_f=15e-6, r_f=5e-3, r_d=0.6,
-             label="240 V: +100 kW -> -100 kW, 4 cells"),
-        dict(v_rms=85, p_before=100e3, p_after=-100e3, n_active=4, l_f=8e-6, r_f=3e-3, r_d=0.4,
-             label="85 V: +100 kW -> -100 kW, 4 cells"),
+        dict(v_rms=240, p_before=100e3, p_after=-100e3, n_active=2, l_f=15e-6, r_f=5e-3, r_d=0.6,
+             label="240 V: +100 kW -> -100 kW, 2 cells"),
+        dict(v_rms=120, p_before=60e3, p_after=-60e3, n_active=2, l_f=15e-6, r_f=5e-3, r_d=0.6,
+             label="120 V: +60 kW -> -60 kW, 2 cells"),
     ]
     for kw, a in zip(cases, ax):
         r = reversal(plot_ax=a, **kw)
