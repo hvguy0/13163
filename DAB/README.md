@@ -11,6 +11,8 @@ below), SiC, 70 kHz. One block of a three-phase, parallelable system.
   cost (`tools/dab_cost.py`).
 * `docs/SCHEMATIC_NONISO.md` - power-stage schematic of the non-isolated block
   (`tools/draw_noniso_schematic.py`, needs `schemdraw`).
+* `docs/DESIGN_DOE.md` - non-isolated block redesigned for 99.06 % efficiency
+  at 35 % load (`tools/chopper_doe.py`).
 * `tools/dab_design.py` - sizing model: thermal device sizing, frequency sweep,
   transformer optimiser, loss tables, cost/volume roll-up, non-isolated AC-chopper
   variant (120 V to 277/230 V),

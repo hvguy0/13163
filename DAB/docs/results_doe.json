@@ -1,0 +1,203 @@
+{
+ "target": 0.9906,
+ "budget_W": 33.212194629516965,
+ "selected": {
+  "base": "40 mOhm TO-247-4",
+  "m": 12,
+  "l": 1.6e-05,
+  "stacks": 3,
+  "ind": {
+   "l": 1.6e-05,
+   "stacks": 3,
+   "n": 8,
+   "ae": 0.0022140000000000003,
+   "ve": 0.000606,
+   "rdc": 0.0005796299771206368,
+   "i_pk": 295.81910045668263,
+   "gap_mm": 11.128777816076486,
+   "mass": 4.613785989840048,
+   "a_cu_mm2": 80.1135
+  },
+  "pts": {
+   "277": {
+    "f35": 60000.0,
+    "p35": {
+     "switch conduction": 9.649945215911593,
+     "switching": 1.7068585990538478,
+     "gate drive": 3.1866352941176466,
+     "inductor copper": 1.223849636035547,
+     "inductor core": 1.1922362415183176,
+     "capacitor ESR": 2.1957304859839524,
+     "fuses, contactors, EMI chokes, bus": 3.510000157480657,
+     "standby": 5.5,
+     "total": 28.165255630101562,
+     "zvs_fraction": 0.7493036211699164
+    },
+    "eta35": 0.9920170248303544,
+    "f100": 50000.0,
+    "p100": {
+     "switch conduction": 65.71377517114495,
+     "switching": 20.813516322047633,
+     "gate drive": 2.6555294117647055,
+     "inductor copper": 5.086739361382531,
+     "inductor core": 1.468387260735925,
+     "capacitor ESR": 7.3866359324381605,
+     "fuses, contactors, EMI chokes, bus": 28.65306251004618,
+     "standby": 5.5,
+     "fans": 6.0,
+     "total": 143.27764596956007,
+     "zvs_fraction": 0.0
+    },
+    "eta100": 0.9858746205151457,
+    "peak": {
+     "switch conduction": 255.81650959376353,
+     "switching": 37.395795359441955,
+     "gate drive": 2.6555294117647055,
+     "inductor copper": 17.19600072184152,
+     "inductor core": 1.468387260735925,
+     "capacitor ESR": 22.77560156850398,
+     "fuses, contactors, EMI chokes, bus": 114.61225004018472,
+     "standby": 5.5,
+     "fans": 6.0,
+     "total": 463.42007395623637,
+     "zvs_fraction": 0.0
+    },
+    "tj_pk": 88.333516997318
+   },
+   "230": {
+    "f35": 50000.0,
+    "p35": {
+     "switch conduction": 9.730432391137604,
+     "switching": 1.256844618794965,
+     "gate drive": 2.6555294117647055,
+     "inductor copper": 1.2423056806866597,
+     "inductor core": 0.960401926468002,
+     "capacitor ESR": 2.2507408927666144,
+     "fuses, contactors, EMI chokes, bus": 3.9414973219911786,
+     "standby": 5.5,
+     "total": 27.537752243609727,
+     "zvs_fraction": 0.9052924791086351
+    },
+    "eta35": 0.9921934918411306,
+    "f100": 50000.0,
+    "p100": {
+     "switch conduction": 64.20333515874984,
+     "switching": 16.891484226203254,
+     "gate drive": 2.6555294117647055,
+     "inductor copper": 4.784264628620915,
+     "inductor core": 0.960401926468002,
+     "capacitor ESR": 6.825120470568851,
+     "fuses, contactors, EMI chokes, bus": 32.17548834278513,
+     "standby": 5.5,
+     "fans": 6.0,
+     "total": 139.9956241651607,
+     "zvs_fraction": 0.0
+    },
+    "eta100": 0.9861937194695105,
+    "peak": {
+     "switch conduction": 253.2353468149032,
+     "switching": 30.89294519798844,
+     "gate drive": 2.6555294117647055,
+     "inductor copper": 16.893525989079908,
+     "inductor core": 0.960401926468002,
+     "capacitor ESR": 22.464025010063672,
+     "fuses, contactors, EMI chokes, bus": 128.70195337114052,
+     "standby": 5.5,
+     "fans": 6.0,
+     "total": 467.30372772140845,
+     "zvs_fraction": 0.0
+    },
+    "tj_pk": 87.35237078479446
+   }
+  },
+  "eta35": 0.9920170248303544,
+  "tj_pk": 88.333516997318,
+  "devices": 48,
+  "k1": 1413.6,
+  "proto": 3334.0
+ },
+ "items": {
+  "SiC switches": [
+   576.0,
+   312.0
+  ],
+  "Gate drives": [
+   144,
+   72
+  ],
+  "Heatsink and fans": [
+   84.0,
+   37.0
+  ],
+  "Inductor": [
+   220,
+   95
+  ],
+  "Port capacitors, snubber": [
+   60,
+   25
+  ],
+  "Low-side crowbar": [
+   150,
+   45
+  ],
+  "EMI filters (2 ports)": [
+   380,
+   160
+  ],
+  "Contactors, fuses, surge": [
+   350,
+   130
+  ],
+  "Sensing, control, aux supply": [
+   550,
+   190
+  ],
+  "PCBs, busbars, enclosure": [
+   400,
+   180
+  ],
+  "Assembly and test": [
+   420.0,
+   167.6
+  ]
+ },
+ "curve": [
+  [
+   0.1,
+   0.9852065942611443,
+   105000.0,
+   15.01553666512965
+  ],
+  [
+   0.2,
+   0.991035456266599,
+   90000.0,
+   18.09126742482453
+  ],
+  [
+   0.35,
+   0.9920170248303544,
+   60000.0,
+   28.165255630101562
+  ],
+  [
+   0.5,
+   0.9893796138647796,
+   50000.0,
+   53.67194748300077
+  ],
+  [
+   0.75,
+   0.9872853794246248,
+   50000.0,
+   96.58773066293003
+  ],
+  [
+   1.0,
+   0.9858746205151457,
+   50000.0,
+   143.27764596956007
+  ]
+ ]
+}
