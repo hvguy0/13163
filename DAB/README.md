@@ -3,6 +3,25 @@
 85-285 Vrms in and out (1:1), 10 kW continuous, 100 kW for 10 s above 200 V (500 A
 below), SiC, 70 kHz. One block of a three-phase, parallelable system.
 
+## Current status
+
+| | Non-isolated block (current: revision E) | Isolated block |
+|---|---|---|
+| Function | 120 V to 277 V or 230 V, selectable, bidirectional, common neutral | 1:1, bidirectional, galvanically isolated |
+| Rating | 10 kW continuous, 20 kW for 10 s | 10 kW continuous, 20 kW for 10 s (a 100 kW-peak version also exists) |
+| Efficiency at 35 % load | 99.21 % predicted (target 99.06 %) | Not redesigned for this target |
+| Cost at 1000 units | About $1,297 | About $2,245 (cost-optimised) |
+| Contactors | None; duplicated crowbar | Documents still show them |
+| Read first | `docs/DESIGN_DOE.md`, `docs/SCHEMATIC_NONISO.md` | `docs/DESIGN_20KW.md`, `docs/DESIGN_COST.md` |
+
+`docs/CERTIFICATION.md` covers codes, standards and the certification path.
+Older documents are kept as the record of how the design got here; where they
+disagree with the table above, the table is current.
+
+## Contents
+
+* `docs/CERTIFICATION.md` - applicable codes and standards, what they require
+  of the design, and next steps with a test laboratory.
 * `docs/DESIGN.md` - the design report (architecture, frequency evaluation,
   transformer, control, compliance, open items).
 * `docs/DESIGN_20KW.md` - the 20 kW-peak variant of both the isolated and the

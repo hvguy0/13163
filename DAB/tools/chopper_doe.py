@@ -37,8 +37,8 @@ TH = np.linspace(0, math.pi, 361)[1:-1]
 SIN = np.sin(TH)
 
 # ---- loss budget constants (all EST; these become design requirements) ------
-R_PATH_LV = 3.0e-3      # ohm: fuse + contactor + both EMI-choke windings + busbar, 120 V side
-R_PATH_HV = 6.0e-3      # ohm: same on the high-voltage side
+R_PATH_LV = 2.5e-3      # ohm: fuse + both EMI-choke windings + busbar, 120 V side (no contactor)
+R_PATH_HV = 5.5e-3      # ohm: same on the high-voltage side
 ESR_CAP = 3.0e-3        # ohm, C1 and C2 each
 FR_RIPPLE = 3.0         # ac/dc resistance of the inductor winding for the ripple current
 GATE_SUPPLY_EFF = 0.85
@@ -46,7 +46,6 @@ T_RISE = 15e-9          # s, hard turn-on voltage/current overlap
 STANDBY = {             # W, always on
     "controller, sensing, comms": 2.5,
     "isolated gate supplies (quiescent)": 0.6,
-    "contactor coils (economised hold, 2)": 1.4,
     "aux supply loss": 1.0,
 }
 P_FAN = 6.0             # W, only when the block dissipates more than FAN_ON
@@ -96,7 +95,7 @@ def losses(mod, m, ind, p_out, v_hi, f, tj):
         "inductor copper": ind["rdc"] * (i2_avg + FR_RIPPLE * i2_rip),
         "inductor core": dd.pv_core(f, ind["l"] * float(dlt.max()) / 2 / (ind["n"] * ind["ae"])) * dd.ENV_FACTOR * ind["ve"],
         "capacitor ESR": ESR_CAP * (duty * (1 - duty) * (i2_avg + i2_rip) + i2_rip),
-        "fuses, contactors, EMI chokes, bus": R_PATH_LV * (p_out / V_LO) ** 2 + R_PATH_HV * (p_out / v_hi) ** 2,
+        "fuses, EMI chokes, bus": R_PATH_LV * (p_out / V_LO) ** 2 + R_PATH_HV * (p_out / v_hi) ** 2,
         "standby": sum(STANDBY.values()),
     }
     tot = sum(parts.values())
@@ -141,6 +140,10 @@ def evaluate(base, m, l, stacks):
     res["tj_pk"] = max(p["tj_pk"] for p in res["pts"].values())
     n_drv = 4 * math.ceil(m / 8)
     fixed = dict(dc.FIX_CHOP)
+    # no port contactors (a transformer has none); over-voltage protection is duplicated instead
+    del fixed["Contactors, fuses, surge"], fixed["Low-side crowbar"]
+    fixed["Fuses, surge protection"] = (150, 55)
+    fixed["Redundant low-side crowbar"] = (210, 65)
     fixed["Inductor"] = (160 + 60 * (stacks - 2), 70 + 25 * (stacks - 2))
     semis_pk = max(p["peak"]["switch conduction"] + p["peak"]["switching"] for p in res["pts"].values())
     m_sink = dd.sink_mass(max(2.0, semis_pk * dd.T_PEAK / (900 * dd.DT_SINK_PEAK)), 60.0)
@@ -216,7 +219,7 @@ def main():
     print("\n  Sensitivity of the 35 % point (277 V): what each assumption is worth")
     f35 = sel["pts"]["277"]["f35"]
     base_loss = sel["pts"]["277"]["p35"]["total"]
-    for name, dw in (("standby +3 W", 3.0), ("path resistance +50 %", 0.5 * p["fuses, contactors, EMI chokes, bus"]),
+    for name, dw in (("standby +3 W", 3.0), ("path resistance +50 %", 0.5 * p["fuses, EMI chokes, bus"]),
                      ("on-resistance +20 %", 0.2 * p["switch conduction"]), ("switching loss x2", p["switching"]),
                      ("inductor loss +50 %", 0.5 * (p["inductor copper"] + p["inductor core"]))):
         print(f"    {name:26s} -> {100*3500/(3500 + base_loss + dw):.3f} %")
