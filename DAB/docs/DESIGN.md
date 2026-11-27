@@ -1,18 +1,25 @@
 # 10 kW / 100 kW-peak bidirectional AC-AC dual active bridge block
 
-Preliminary design, revision C. All numbers come from `tools/dab_design.py` and
+Preliminary design, revision D. All numbers come from `tools/dab_design.py` and
 `tools/dab_sim.py`; rerun them to regenerate the tables and plots. Nothing here
 has been built or measured. Every price, volume and mass is a rough estimate
 for comparing options against each other, not a quotation. Section 13 lists
 what is estimated and what must be checked before hardware is committed.
+
+## What changed in revision D
+
+The non-isolated variant must now convert voltage: 120 V on one side and 277 V
+or 230 V (selectable) on the other, usable three-phase as 208Y/120 to 480Y/277
+or 400Y/230 in either direction. It is redesigned as a bidirectional AC chopper
+(section 9). The isolated block is unchanged and still 1:1.
 
 ## What changed in revision C
 
 * 60 kW at 120 V is confirmed as sufficient surge on a 208 V service, so the
   500 A envelope stands.
 * Parallel sharing is now simulated (section 11).
-* The non-isolated variant is reduced to a plain solid-state switch with the
-  same sensing and telemetry as the isolated block (section 9).
+* The non-isolated variant was reduced to a plain solid-state switch
+  (superseded by revision D).
 
 ## What changed from revision A to B
 
@@ -252,44 +259,105 @@ waveform model was checked against a time-stepped switched simulation
 
 ![Waveforms](img/waveforms.png)
 
-## 9. Non-isolated variant
+## 9. Non-isolated variant: 120 V to 277 V or 230 V
 
-With a 1:1 ratio and no isolation there is nothing left to transform, so this
-variant is kept as simple as it can be: **one bidirectional SiC AC switch in
-series with the line** (two common-source positions of ten 16 mohm discretes
-each), with a snubber and surge absorber across it. There is no PWM, no
-magnetics and no link capacitor.
+**Topology: bidirectional AC chopper**, in effect an electronic
+autotransformer.
 
-What it does: connects at a voltage zero, carries the 500 A surge for 10 s,
-and opens within microseconds on over-current, over-temperature or command.
-When closed it is a few milliohms of wire. It does not regulate voltage or
-limit current continuously; it interrupts.
+```
+ High side                series switch            inductor          Low side
+ 277 V or 230 V   o--[EMI]--+--[ SiC AC switch ]--+--[ 20 uH ]--+--[EMI]--o   120 V
+                           ===                    |            ===
+                            |             [ SiC AC switch ]     |
+ Neutral          o---------+---------------------+-------------+---------o   Neutral (straight through)
+```
 
-It uses the same controller board, the same sensors and the same telemetry as
-the isolated block: voltage on both ports, current, device and heatsink
-temperatures, P, Q, S, power factor, direction, energy each way, state and
-fault log, over the same CAN FD and Ethernet interfaces. A site controller
-sees the two variants as the same kind of device.
+Two bidirectional SiC switches (each a pair of device groups, ten 16 mohm
+TO-247 parts per group, 40 devices in total), one inductor on the low-voltage
+side and a film capacitor on each port. There is no transformer, no DC link
+and no unfolder. Within each half cycle the circuit is an ordinary synchronous
+buck leg, so it steps down in one direction and steps up in the other with the
+same hardware.
 
-| | Isolated DAB block | Non-isolated block |
+* **Ratio selection.** The ratio is the duty cycle: 0.433 for 277 V, 0.522 for
+  230 V. Selecting between them is a setting over the telemetry link or a
+  jumper, with no hardware change. Any ratio in between is available, so the
+  block can also regulate the output a few per cent either way.
+* **Bidirectional with no warning.** A synchronous leg at fixed duty transfers
+  power in whichever direction the two sides push it, with no control action
+  at all. This is the closest of the two variants to how an iron transformer
+  behaves.
+* **Surge.** 500 A on the 120 V side for 10 s, which is 60 kW per block. It can
+  also limit current continuously by backing off the duty, which the plain
+  switch of revision C could not.
+* **Telemetry.** Same controller board, sensors and interfaces as the isolated
+  block, plus the selected ratio.
+
+Predicted performance (hard-switched; hardware sized to cover both ratios):
+
+| Ratio | f | Devices | 10 kW loss / efficiency | 2.5 kW efficiency | 60 kW peak loss / efficiency | Peak Tj |
+|---|---|---|---|---|---|---|
+| 120 - 277 | 50 kHz | 36 | 111 W / 98.89 % | 97.65 % | 1.76 kW / 97.1 % | 124 C |
+| **120 - 277** | **70 kHz** | **40** | **124 W / 98.76 %** | **97.34 %** | **1.67 kW / 97.2 %** | **122 C** |
+| 120 - 277 | 100 kHz | 44 | 147 W / 98.53 % | 96.80 % | 1.67 kW / 97.2 % | 122 C |
+| 120 - 230 | 70 kHz | 36 | 116 W / 98.84 % | 97.57 % | 1.78 kW / 97.0 % | 124 C |
+
+At 10 kW and 70 kHz the loss splits as switching 49 W, conduction 29 W,
+auxiliaries 25 W, inductor 15 W, gate drive 6 W. This converter is hard
+switched, so frequency costs more here than in the DAB: 50 kHz saves 13 W and
+four devices, 100 kHz costs 23 W and four more. 70 kHz is kept for commonality
+with the isolated block and for the same emissions reason; 50 kHz is a
+reasonable alternative if this variant is built on its own.
+
+The inductor is the one magnetic part and it is not a ferrite transformer. It
+must carry 707 A peak without collapsing, which stores too much energy for a
+gapped ferrite of sensible size, so a soft-saturating powder core is assumed:
+20 uH at rated current falling to about 6 uH in the surge. It has not been
+designed in detail; the 3.5 kg and 15 W figures are estimates.
+
+**Three-phase use.** Three blocks, one per phase, with the neutral running
+straight through, give 208Y/120 to 480Y/277 or 400Y/230 in either direction
+with no phase shift.
+
+* Both systems must be four-wire wye and they share one neutral. A 480 V
+  three-wire (delta or ungrounded) source has no neutral to connect and would
+  need a neutral-forming transformer first.
+* The two systems are not isolated from each other. Grounding, ground-fault
+  protection and the autotransformer rules of the electrical code apply as
+  they would to an iron autotransformer.
+* Bank ratings: 30 kW continuous and 180 kW for 10 s.
+
+**The hazard that isolation was hiding.** If the series switch fails short,
+the 277 V side is connected directly to the 120 V side. The design therefore
+includes a low-side over-voltage crowbar that fires independently of the
+controller and clears the high-side fuse, and a contactor on each port. This
+is the main item a safety evaluation will examine, and it should be treated as
+a required function, not an option.
+
+**Comparison** (per block; the isolated block is the 1:1 design of sections
+2-8):
+
+| | Isolated DAB block (1:1) | Non-isolated chopper (120 - 277/230) |
 |---|---|---|
-| Functions | Isolation, independent grounding, current limiting, power-flow control, fast disconnect | Fast disconnect, zero-voltage connection, surge ride-through, protection |
-| Switches in the current path | 8 | 2 |
-| Discrete devices | 144 | 20 |
-| Magnetics | Two 2.7 kg ferrite transformers | None |
-| Loss at 10 kW, 240 V | 123 W (98.77 %) | 32 W (99.7 %) |
-| Loss at 10 kW, 85 V | 381 W | 84 W |
-| Peak loss (500 A) | up to 7.6 kW | 1.3 kW |
-| Estimated cost | $9.6k | $2.8k |
-| Estimated volume | 42 L | 17 L |
-| Estimated mass | 26 kg | 11 kg |
+| Functions | Isolation, independent grounding, current limiting, power-flow control | Voltage conversion with selectable ratio, current limiting, fast disconnect |
+| 10 s peak | 100 kW (500 A) | 60 kW (500 A on the 120 V side) |
+| Discrete devices | 144 | 40 |
+| Magnetics | Two 2.7 kg ferrite transformers | One 3.5 kg inductor |
+| Loss at 10 kW | 123 W at 240 V | 124 W |
+| Peak loss | up to 7.6 kW | 1.7 kW |
+| Estimated cost | $9.6k | $4.2k |
+| Estimated volume | 42 L | 25 L |
+| Estimated mass | 26 kg | 18 kg |
 
-Dropping isolation saves about 70 % of the cost and about 60 % of the volume
-and mass, and cuts loss by a factor of four. It gives up independent grounding
-of the two sides, different connections on each side of a three-phase bank,
-blocking of common-mode voltage and DC, and continuous current limiting.
-Non-isolated blocks in parallel share by their on-resistance, which is
-naturally balancing because it rises with temperature.
+The chopper is a little under half the cost and about 60 % of the volume and
+70 % of the mass of the isolated block. Its efficiency at 10 kW is about the
+same, because it trades the DAB's eight devices in the path for hard
+switching; in the surge it loses far less.
+
+The isolated block can do the same voltage conversion by winding the
+transformer 3:7 instead of 1:1. The ratio is then fixed by the turns; running
+it at 230 V as well as 277 V means operating off its matched ratio, with
+higher circulating current. That variant has not been modelled.
 
 ## 10. Size of one block and of a three-phase bank
 
@@ -316,11 +384,11 @@ against a catalogue). The block is therefore about half the weight and similar
 in volume. The heatsink and the two EMI filters, not the magnetics, set its
 size; a tighter mechanical design could plausibly reach 30 L.
 
-| Configuration | Continuous | 10 s peak | Isolated | Non-isolated |
-|---|---|---|---|---|
-| One block (single phase) | 10 kW | 100 kW | 42 L, 26 kg, $9.6k | 17 L, 11 kg, $2.8k |
-| Three-phase bank (3 blocks) | 30 kW | 300 kW | 144 L, 83 kg, $29k | 60 L, 37 kg, $8.3k |
-| Three-phase, 5 in parallel (15 blocks) | 150 kW | 1.5 MW | 720 L, 415 kg, $144k | 299 L, 183 kg, $42k |
+| Configuration | Continuous | Isolated 1:1 | Non-isolated 120 - 277/230 |
+|---|---|---|---|
+| One block (single phase) | 10 kW | 100 kW peak, 42 L, 26 kg, $9.6k | 60 kW peak, 25 L, 18 kg, $4.2k |
+| Three-phase bank (3 blocks) | 30 kW | 300 kW peak, 144 L, 83 kg, $29k | 180 kW peak, 86 L, 57 kg, $12.6k |
+| Three-phase, 5 in parallel (15 blocks) | 150 kW | 1.5 MW peak, 720 L, 415 kg, $144k | 900 kW peak, 432 L, 285 kg, $63k |
 
 Multi-block figures include 15 % volume and 8 % mass for a common frame.
 
@@ -384,7 +452,10 @@ Five blocks per phase give 50 kW continuous and 500 kW for 10 s per phase, with
   upstream protection, not the blocks.
 * **Physical.** 15 isolated blocks at 42 L are 630 L of chassis, 720 L framed:
   one 800 mm wide, 2 m tall cabinet if air paths allow, more comfortably two.
-  Non-isolated, the same bank fits in half of one.
+  Non-isolated, the same bank is about 430 L and fits in one.
+* **Paralleling the non-isolated blocks.** At fixed duty they share through
+  the real impedance of their inductors, as transformers do, with the same
+  virtual-impedance and trim terms available. This has not been simulated.
 
 ## 12. Compliance and instrumentation
 
@@ -453,6 +524,10 @@ battery-management code already in this repository.
    the zero-crossing notch grows with out-of-phase current.
 9. **Protection coordination** with the 500 A fault-current ceiling needs a
    site-level study.
-10. Recommended first hardware step: one cell (both bridges and a transformer)
+10. **Non-isolated chopper**: the loss model uses an estimated hard-switching
+    energy per device, the inductor is not designed, the filter resonance needs
+    active damping, and zero-crossing commutation of the AC switches is not
+    simulated. Parallel sharing of choppers is not simulated.
+11. Recommended first hardware step: one cell (both bridges and a transformer)
     tested DC-DC at 170 V and 400 V links, including a 10 s, 300 A thermal run,
     before the unfolders are added.

@@ -6,7 +6,8 @@ below), SiC, 70 kHz. One block of a three-phase, parallelable system.
 * `docs/DESIGN.md` - the design report (architecture, frequency evaluation,
   transformer, control, compliance, open items).
 * `tools/dab_design.py` - sizing model: thermal device sizing, frequency sweep,
-  transformer optimiser, loss tables, cost/volume roll-up, non-isolated variant,
+  transformer optimiser, loss tables, cost/volume roll-up, non-isolated AC-chopper
+  variant (120 V to 277/230 V),
   scaling. Writes `docs/results.json`
   and the plots in `docs/img/`.
 * `tools/dab_sim.py` - switched-waveform check of the model and closed-loop

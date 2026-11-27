@@ -474,6 +474,75 @@ def non_isolated():
     return r
 
 
+E_SW_REF = 0.45e-3     # J per device per cycle, hard-switched at 400 V / 50 A incl. diode recovery (EST)
+E_OSS_REF = 30e-6      # J per device at 400 V (EST)
+CHOP_L = 20e-6         # H at rated current; soft-saturating core, about 6 uH at 700 A (EST)
+CHOP_RL = 0.4e-3       # ohm inductor winding (EST)
+
+
+def chopper(v_lo=120.0, v_hi=277.0, f=70e3):
+    """
+    Non-isolated voltage-converting block: bidirectional AC chopper (electronic
+    autotransformer) with a straight-through neutral.  Two bidirectional SiC
+    switches (series and shunt, four device groups), one inductor on the
+    low-voltage side, film capacitors on both ports.  Within each half cycle it
+    is an ordinary synchronous buck leg: step-down one way, step-up the other.
+    The ratio is the duty cycle, so 277 V and 230 V are a setting, not hardware.
+    Peak is I_PEAK on the low-voltage side.
+    """
+    duty = v_lo / v_hi
+    vpk = math.sqrt(2) * v_hi
+
+    def p_sw(i_rms, m):
+        hard = 0.5 * f * E_SW_REF * (vpk / 400.0) * (math.sqrt(2) * i_rms / 50.0)
+        return hard + 0.6 * f * m * E_OSS_REF * (vpk / 400.0) ** 1.5
+
+    sel = None
+    for m in range(2, 24):
+        d = DISC.par(m)
+        tj = 120.0
+        for _ in range(12):
+            p_grp = max(duty, 1 - duty) * d.rds(tj) * I_PEAK ** 2 + p_sw(I_PEAK, m)
+            tj = min(T_SINK_CONT + DT_SINK_PEAK + p_grp * (d.rth_jc + d.rth_cs), 400.0)
+        if tj <= TJ_LIMIT:
+            sel = (m, d, tj)
+            break
+    m, d, tj = sel
+
+    def loss(p, t_j):
+        i = p / v_lo
+        ripple = math.sqrt(2) * v_lo * (1 - duty) / (f * CHOP_L) / math.sqrt(12) / math.sqrt(2)
+        i2 = i ** 2 + ripple ** 2
+        parts = dict(cond=2 * d.rds(t_j) * i2, sw=p_sw(i, m), gate=2 * d.qg * V_GATE_SWING * f,
+                     inductor=CHOP_RL * i2 * (1.0 if p <= P_CONT else 1.3) + 12.0,
+                     bus=R_BUS_SIDE * (i ** 2 + (i * duty) ** 2), aux=25.0)
+        parts["loss"] = sum(parts.values())
+        parts["eff"] = 1 - parts["loss"] / p
+        return parts
+
+    cont = loss(P_CONT, 70.0)
+    part = loss(0.25 * P_CONT, 60.0)
+    p_pk = v_lo * I_PEAK
+    peak = loss(p_pk, tj)
+    m_sink = max(2.0, (peak["cond"] + peak["sw"]) * T_PEAK / (900 * DT_SINK_PEAK))
+    items = {
+        "Switches (4 groups)": (4 * d.cost_sw, pkg_volume_l(d, 4), 0.4),
+        "Gate drives": (4 * 30, 0.0, 0.2),
+        "Inductor": (220, 1.5, 3.5),
+        "Port capacitors, snubber": (60, 0.4, 0.4),
+        "Low-side over-voltage crowbar": (150, 0.3, 0.3),
+        "Heatsink and fans": (12 * m_sink + 60, m_sink / 2.7 / 0.35 + 0.8, m_sink + 0.4),
+        "EMI filters (2 ports)": (500, 2.8, 4.2),
+        "Contactors, fuses, surge (2 ports)": (500, 1.6, 2.4),
+        "Sensing, control, aux supply": (550, 1.2, 0.8),
+        "Busbars, PCBs, enclosure": (500, 0.0, 3.0),
+    }
+    r = finish(items)
+    r.update(v_lo=v_lo, v_hi=v_hi, duty=duty, m=m, devices=4 * m, tj=tj, cont=cont, part=part,
+             peak=peak, p_peak=p_pk, m_sink=m_sink, f=f)
+    return r
+
+
 def fmt_row(cols, widths):
     return " | ".join(str(c).ljust(w) for c, w in zip(cols, widths))
 
@@ -584,27 +653,40 @@ def main():
     for k, v in sel_ru["items"].items():
         print(f"  {k:38s} ${v[0]:7.0f}  {v[1]:5.1f} L  {v[2]:5.1f} kg")
     print(f"  TOTAL  ${sel_ru['cost']:.0f}   {sel_ru['volume_L']:.1f} L enclosure   {sel_ru['mass_kg']:.1f} kg")
-    ni = non_isolated()
-    print(f"\n=== Roll-up, non-isolated block ({ni['m_series']}x 16 mOhm per series position, Tj {ni['tj']:.0f} C) ===")
+    print("\n=== Non-isolated voltage-converting block (AC chopper), low side 500 A peak ===")
+    w2 = [14, 6, 8, 7, 9, 9, 9, 10, 10, 10]
+    print(fmt_row(["ratio", "f kHz", "devices", "Tj pk", "10kW W", "10kW eta", "2.5kW eta", "peak kW", "pk loss kW", "pk eta"], w2))
+    chop = {}
+    for v_hi in (277.0, 230.0):
+        for f in (50e3, 70e3, 100e3):
+            c = chopper(120.0, v_hi, f)
+            print(fmt_row([f"120 <-> {v_hi:.0f}", f"{f/1e3:.0f}", c["devices"], f"{c['tj']:.0f}", f"{c['cont']['loss']:.0f}",
+                           f"{c['cont']['eff']*100:.2f}", f"{c['part']['eff']*100:.2f}", f"{c['p_peak']/1e3:.0f}",
+                           f"{c['peak']['loss']/1e3:.2f}", f"{c['peak']['eff']*100:.2f}"], w2))
+            if f == F_SEL:
+                chop[str(int(v_hi))] = c
+    ni = max(chop.values(), key=lambda c: c["devices"])     # hardware must cover both ratios
+    print(f"  10 kW loss split at 277 V, 70 kHz: " + ", ".join(f"{k} {v:.0f}" for k, v in chop['277']['cont'].items() if k not in ('loss', 'eff')))
+    print(f"\n=== Roll-up, non-isolated block ({ni['m']} x 16 mOhm per group, {ni['devices']} devices, heatsink {ni['m_sink']:.1f} kg) ===")
     for k, v in ni["items"].items():
         print(f"  {k:38s} ${v[0]:7.0f}  {v[1]:5.1f} L  {v[2]:5.1f} kg")
     print(f"  TOTAL  ${ni['cost']:.0f}   {ni['volume_L']:.1f} L enclosure   {ni['mass_kg']:.1f} kg")
-    print("  loss at 10 kW:", {k: round(v) for k, v in ni["loss_10kW"].items()}, f"peak loss {ni['peak_loss']/1e3:.2f} kW")
     out["rollup_isolated"] = sel_ru
-    out["rollup_non_isolated"] = ni
+    out["non_isolated_chopper"] = chop
+    out["bypass_switch_1to1"] = non_isolated()
 
     print("\n=== Scaling (frame adds 15 % volume, 8 % mass per multi-block assembly) ===")
     scale = []
-    for label, blocks, par in (("1-phase block", 1, 1), ("3-phase bank", 3, 1), ("3-phase, 5 in parallel", 15, 5)):
+    for label, blocks in (("1-phase block", 1), ("3-phase bank", 3), ("3-phase, 5 in parallel", 15)):
         k_v, k_m = (1.0, 1.0) if blocks == 1 else (1.15, 1.08)
-        row = dict(config=label, blocks=blocks, cont_kW=P_CONT * blocks / 1e3, peak_kW=P_PEAK * blocks / 1e3,
+        row = dict(config=label, blocks=blocks, cont_kW=P_CONT * blocks / 1e3,
+                   iso_peak_kW=P_PEAK * blocks / 1e3, ni_peak_kW=ni["p_peak"] * blocks / 1e3,
                    iso_L=sel_ru["volume_L"] * blocks * k_v, iso_kg=sel_ru["mass_kg"] * blocks * k_m,
                    iso_cost=sel_ru["cost"] * blocks, ni_L=ni["volume_L"] * blocks * k_v,
-                   ni_kg=ni["mass_kg"] * blocks * k_m, ni_cost=ni["cost"] * blocks,
-                   cap_A_240=2 * math.pi * F_LINE * 40e-6 * 240 * par)
+                   ni_kg=ni["mass_kg"] * blocks * k_m, ni_cost=ni["cost"] * blocks)
         scale.append(row)
-        print(f"  {label:24s} {row['cont_kW']:5.0f} kW cont {row['peak_kW']:6.0f} kW peak | isolated {row['iso_L']:6.0f} L "
-              f"{row['iso_kg']:5.0f} kg ${row['iso_cost']:7.0f} | non-isolated {row['ni_L']:5.0f} L {row['ni_kg']:4.0f} kg ${row['ni_cost']:6.0f}")
+        print(f"  {label:24s} {row['cont_kW']:5.0f} kW cont | isolated {row['iso_peak_kW']:5.0f} kW pk {row['iso_L']:5.0f} L "
+              f"{row['iso_kg']:4.0f} kg ${row['iso_cost']:7.0f} | chopper {row['ni_peak_kW']:5.0f} kW pk {row['ni_L']:4.0f} L {row['ni_kg']:4.0f} kg ${row['ni_cost']:6.0f}")
     out["scaling"] = scale
 
     with open(os.path.join(OUT, "results.json"), "w") as fh:
