@@ -1,12 +1,20 @@
 # 10 kW / 100 kW-peak bidirectional AC-AC dual active bridge block
 
-Preliminary design, revision B. All numbers come from `tools/dab_design.py` and
+Preliminary design, revision C. All numbers come from `tools/dab_design.py` and
 `tools/dab_sim.py`; rerun them to regenerate the tables and plots. Nothing here
 has been built or measured. Every price, volume and mass is a rough estimate
 for comparing options against each other, not a quotation. Section 13 lists
 what is estimated and what must be checked before hardware is committed.
 
-## What changed from revision A
+## What changed in revision C
+
+* 60 kW at 120 V is confirmed as sufficient surge on a 208 V service, so the
+  500 A envelope stands.
+* Parallel sharing is now simulated (section 11).
+* The non-isolated variant is reduced to a plain solid-state switch with the
+  same sensing and telemetry as the isolated block (section 9).
+
+## What changed from revision A to B
 
 | | Rev A | Rev B |
 |---|---|---|
@@ -35,8 +43,7 @@ Still assumed: the 10 s peak repeats no more often than once every 5 minutes,
 and "power" means real power near unity power factor.
 
 On a 208 V service a line-to-neutral block sees 120 V. There the surge is 60 kW,
-six times continuous. Getting the full 100 kW at 120 V needs 833 A; section 4
-says what that costs.
+six times continuous, which has been confirmed as enough.
 
 ![Efficiency and power envelope](img/efficiency.png)
 
@@ -122,10 +129,6 @@ is easy.
 The cost of thermal sizing is efficiency during the surge: 6-7.6 kW is
 dissipated at the worst points, where revision A's oversized modules would have
 lost about half that.
-
-If the full 100 kW were required at 120 V, current rises to 833 A. Loss scales
-with current squared, so the device count rises by roughly 2.8 times (about
-$15k of switches) and the inductance target falls to about 385 nH per cell.
 
 ## 5. Switching frequency evaluation
 
@@ -251,32 +254,42 @@ waveform model was checked against a time-stepped switched simulation
 
 ## 9. Non-isolated variant
 
-With a 1:1 ratio and no isolation there is nothing left to transform: the
-ideal non-isolated "transformer" is a wire. What a power-electronic block can
-still usefully do in that position is switch, limit and trim. The proposal is a
-**bidirectional SiC AC switch in series with the line plus a smaller shunt
-freewheel switch**, operated as an AC chopper at a duty near 1.
+With a 1:1 ratio and no isolation there is nothing left to transform, so this
+variant is kept as simple as it can be: **one bidirectional SiC AC switch in
+series with the line** (two common-source positions of ten 16 mohm discretes
+each), with a snubber and surge absorber across it. There is no PWM, no
+magnetics and no link capacitor.
+
+What it does: connects at a voltage zero, carries the 500 A surge for 10 s,
+and opens within microseconds on over-current, over-temperature or command.
+When closed it is a few milliohms of wire. It does not regulate voltage or
+limit current continuously; it interrupts.
+
+It uses the same controller board, the same sensors and the same telemetry as
+the isolated block: voltage on both ports, current, device and heatsink
+temperatures, P, Q, S, power factor, direction, energy each way, state and
+fault log, over the same CAN FD and Ethernet interfaces. A site controller
+sees the two variants as the same kind of device.
 
 | | Isolated DAB block | Non-isolated block |
 |---|---|---|
-| Functions | Isolation, independent grounding, current limit, fast disconnect, power-flow control | Current limit, fast disconnect, soft connection, a few per cent of voltage trim |
+| Functions | Isolation, independent grounding, current limiting, power-flow control, fast disconnect | Fast disconnect, zero-voltage connection, surge ride-through, protection |
 | Switches in the current path | 8 | 2 |
-| Discrete devices | 144 | 26 |
-| Magnetics | Two 2.7 kg ferrite transformers | One small chopper inductor |
-| Loss at 10 kW, 240 V | 123 W (98.77 %) | 38 W (99.6 %) |
-| Loss at 10 kW, 85 V | 381 W | 90 W |
+| Discrete devices | 144 | 20 |
+| Magnetics | Two 2.7 kg ferrite transformers | None |
+| Loss at 10 kW, 240 V | 123 W (98.77 %) | 32 W (99.7 %) |
+| Loss at 10 kW, 85 V | 381 W | 84 W |
 | Peak loss (500 A) | up to 7.6 kW | 1.3 kW |
-| Estimated cost | $9.6k | $3.2k |
-| Estimated volume | 42 L | 20 L |
-| Estimated mass | 26 kg | 14 kg |
+| Estimated cost | $9.6k | $2.8k |
+| Estimated volume | 42 L | 17 L |
+| Estimated mass | 26 kg | 11 kg |
 
-So dropping isolation saves about two thirds of the cost and half the volume
-and mass, and cuts loss by a factor of three to five. What it gives up is the
-ability to ground the two sides independently, to connect them differently in a
-three-phase bank (for example delta on one side and wye on the other), and to
-block common-mode voltage and DC between the sides. If none of those are needed
-at a given site, the non-isolated block is the better engineering choice. The
-two could share the control board, sensing, enclosure format and telemetry.
+Dropping isolation saves about 70 % of the cost and about 60 % of the volume
+and mass, and cuts loss by a factor of four. It gives up independent grounding
+of the two sides, different connections on each side of a three-phase bank,
+blocking of common-mode voltage and DC, and continuous current limiting.
+Non-isolated blocks in parallel share by their on-resistance, which is
+naturally balancing because it rises with temperature.
 
 ## 10. Size of one block and of a three-phase bank
 
@@ -305,9 +318,9 @@ size; a tighter mechanical design could plausibly reach 30 L.
 
 | Configuration | Continuous | 10 s peak | Isolated | Non-isolated |
 |---|---|---|---|---|
-| One block (single phase) | 10 kW | 100 kW | 42 L, 26 kg, $9.6k | 20 L, 14 kg, $3.2k |
-| Three-phase bank (3 blocks) | 30 kW | 300 kW | 144 L, 83 kg, $29k | 70 L, 45 kg, $9.7k |
-| Three-phase, 5 in parallel (15 blocks) | 150 kW | 1.5 MW | 720 L, 415 kg, $144k | 349 L, 227 kg, $49k |
+| One block (single phase) | 10 kW | 100 kW | 42 L, 26 kg, $9.6k | 17 L, 11 kg, $2.8k |
+| Three-phase bank (3 blocks) | 30 kW | 300 kW | 144 L, 83 kg, $29k | 60 L, 37 kg, $8.3k |
+| Three-phase, 5 in parallel (15 blocks) | 150 kW | 1.5 MW | 720 L, 415 kg, $144k | 299 L, 183 kg, $42k |
 
 Multi-block figures include 15 % volume and 8 % mass for a common frame.
 
@@ -325,11 +338,32 @@ Five blocks per phase give 50 kW continuous and 500 kW for 10 s per phase, with
 2500 A available at 200 V and above.
 
 * **Sharing.** Transformers in parallel share in inverse proportion to their
-  impedance. The blocks do the same through `Zv`: with equal `Zv` they share
-  equally with no communication, and a slow trim over CAN removes residual
-  sensor error. Without `Zv` the integral terms of paralleled blocks would
-  fight, so it is mandatory in parallel operation. This has not been simulated
-  yet and is the first thing to verify.
+  impedance. The blocks do the same through `Zv`, each using only its own
+  sensors. Simulated for five blocks at 240 V with deliberately mismatched
+  hardware (leakage +/-10 %, filter inductance +/-20 %, voltage-difference
+  sensing +/-0.3 %, current sensing +/-1 %), through rated load, an unannounced
+  reversal and a surge (`tools/dab_parallel.py`):
+
+  | Control | Spread at rated | Spread after reversal | Spread in surge | Worst block vs mean |
+  |---|---|---|---|---|
+  | No droop, no trim | 61 % and not settled | - | - | unusable |
+  | 3 % droop only | 14.6 % | 20.8 % | 1.5 % | +10 % |
+  | 3 % droop + bank-average trim | 2.3 % | 2.2 % | 2.3 % | +1.1 % |
+
+  Droop alone is enough to run safely: the error is a fixed number of amps
+  caused by voltage-sensing mismatch, so it matters at rated load and vanishes
+  in the surge, where sharing matters most. The trim is a slow correction
+  (about 15 ms) fed with the bank-average current over CAN; it brings sharing
+  down to the current-sensor accuracy. If CAN is lost the blocks fall back to
+  droop-only sharing. The reversal passes through all five blocks together
+  with no circulating current between them.
+
+  ![Parallel sharing](img/parallel_sharing.png)
+
+  With a plain 3 % droop the far bus sags by about a third at ten times rated
+  current (158 V in the simulated surge), which is how an iron transformer of
+  that impedance behaves. Making `Zv` fall as current rises would hold the
+  voltage higher in the surge while keeping 3 % for sharing at rated load.
 * **Block shedding.** At light load whole blocks go idle with their contactors
   closed and bridges off. A 150 kW bank at 10 % load runs two blocks per phase
   near their best efficiency instead of fifteen at their worst.
@@ -409,7 +443,9 @@ battery-management code already in this repository.
    verified N87 datasheet points and two estimated ones.
 5. **Leakage inductance** is from a one-dimensional formula, good to perhaps
    +/-20 %. Confirm by finite-element analysis and a prototype.
-6. **Parallel operation and `Zv` droop** are designed but not simulated.
+6. **Parallel sharing** is simulated with an averaged model and an ideal shared
+   polarity signal. Loss of sync, a block joining or leaving under load, and
+   CAN latency in the trim loop are not yet covered.
 7. **Control model** is averaged with ideal sensing. Validate in a switched
    circuit simulator including dead time, device-to-device current sharing and
    cell mismatch.

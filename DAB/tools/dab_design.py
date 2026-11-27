@@ -435,11 +435,12 @@ def finish(items, packing=0.45):
 
 def non_isolated():
     """
-    Transformerless alternative: a bidirectional SiC AC switch in series with the
-    line (two common-source positions, always conducting) plus a smaller shunt
-    freewheel switch, run as an AC chopper at duty ~1.  Functions kept: soft
-    connection, fast disconnect, current limiting, a few per cent of voltage
-    trim.  Functions lost: isolation, independent grounding of the two sides.
+    Transformerless alternative, kept deliberately simple: one bidirectional SiC
+    AC switch (two common-source positions, always conducting) in series with
+    the line, with a snubber / surge absorber across it.  It connects at a
+    voltage zero, carries the 500 A surge for 10 s, and opens in microseconds on
+    over-current, over-temperature or command.  No PWM, no magnetics.
+    Sensing, controller and telemetry are the same as the isolated block.
     """
     best = None
     for m in range(2, 20):
@@ -452,26 +453,24 @@ def non_isolated():
             best = (m, d, tj, p_sw)
             break
     m, d, tj, p_sw = best
-    shunt = DISC.par(max(2, m // 3))
     m_sink = max(2.0, 2 * p_sw * T_PEAK / (900 * DT_SINK_PEAK))
     loss = {}
     for v in V_GRID:
         i = P_CONT / v
-        loss[str(int(v))] = 2 * d.rds(70.0) * i ** 2 + 2 * R_BUS_SIDE * i ** 2 + 8 * d.qg * V_GATE_SWING * 70e3 * 0.25 + 25
+        loss[str(int(v))] = 2 * d.rds(70.0) * i ** 2 + 2 * R_BUS_SIDE * i ** 2 + 25
     items = {
         "Series AC switch": (2 * d.cost_sw, pkg_volume_l(d, 2), 0.2),
-        "Shunt freewheel switch": (2 * shunt.cost_sw, pkg_volume_l(shunt, 2), 0.1),
-        "Gate drives": (30 * 4, 0.0, 0.1),
-        "Chopper inductor and capacitors": (200, 1.0, 2.0),
+        "Gate drive": (60, 0.0, 0.1),
+        "Snubber and surge absorber": (120, 0.4, 0.5),
         "Heatsink and fans": (12 * m_sink + 60, m_sink / 2.7 / 0.35 + 0.6, m_sink + 0.4),
-        "EMI filters (2 ports, smaller)": (450, 2.4, 3.6),
+        "EMI filters (2 ports, smaller)": (300, 1.6, 2.4),
         "Contactors, fuses, surge (2 ports)": (500, 1.6, 2.4),
-        "Sensing, control, aux supply": (450, 1.0, 0.7),
-        "Busbars, PCBs, enclosure": (450, 0.0, 2.5),
+        "Sensing, control, aux supply": (550, 1.2, 0.8),
+        "Busbars, PCBs, enclosure": (400, 0.0, 2.5),
     }
     r = finish(items)
     r.update(m_series=m, tj=tj, loss_10kW=loss, peak_loss=2 * p_sw + 2 * R_BUS_SIDE * I_PEAK ** 2,
-             devices=2 * m + 2 * shunt.n_par)
+             devices=2 * m)
     return r
 
 

@@ -11,10 +11,12 @@ below), SiC, 70 kHz. One block of a three-phase, parallelable system.
   and the plots in `docs/img/`.
 * `tools/dab_sim.py` - switched-waveform check of the model and closed-loop
   simulation of unannounced power reversal.
+* `tools/dab_parallel.py` - current sharing of five mismatched blocks in
+  parallel, with droop and bank-average trim.
 
 ```
 pip install numpy matplotlib
-cd tools && python3 dab_design.py && python3 dab_sim.py
+cd tools && python3 dab_design.py && python3 dab_sim.py && python3 dab_parallel.py
 ```
 
 This is a paper design. Nothing has been built or measured.
