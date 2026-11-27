@@ -239,7 +239,9 @@ def design_transformer(f, l_cell, n_cells, im_pk_403, mat=1.0):
     if l_target <= 20e-9:
         return None
     # operating points one cell must survive
-    cont = [op_point(v, P_CONT, 1, f, l_cell, im_pk_403) for v in V_GRID]
+    # one cell carries the full continuous load where it can; otherwise as few cells as possible
+    cont = [next(o for o in (op_point(v, P_CONT, na, f, l_cell, im_pk_403) for na in range(1, n_cells + 1))
+                 if o is not None and o["d"] <= D_MAX) for v in V_GRID]
     peak = op_point(V_D, V_D * I_PEAK, n_cells, f, l_cell, im_pk_403)
     best = None
     for core in CORES:
@@ -409,7 +411,8 @@ def pkg_volume_l(mod, positions):
 def rollup(res, c_link_uF=40.0):
     kw = res["_kw"]
     n, hf, unf, xf = kw["n_cells"], kw["mod"], kw["unf_mod"], kw["xf"]
-    m_sink = res["m_sink_kg"]
+    m_sink = sink_mass(res["m_sink_kg"], max(c["hf_cond"] + c["hf_sw"] + c["unf"] for c in res["cont"].values()))
+    low = I_PEAK < 250          # filters and contactors no longer sized by a 700 A crest
     items = {  # name: (cost USD, volume L, mass kg)
         "HF bridge switches": (8 * n * hf.cost_sw, pkg_volume_l(hf, 8 * n), 0.3 * n),
         "Unfolder switches": (8 * unf.cost_sw, pkg_volume_l(unf, 8), 0.3),
@@ -417,12 +420,20 @@ def rollup(res, c_link_uF=40.0):
         "Transformers": (450 * n, 1.3 * xf["box_L"] * n, xf["mass_kg"] * n),
         "Link capacitors": (0.7 * 2 * c_link_uF, 0.004 * 2 * c_link_uF, 0.004 * 2 * c_link_uF),
         "Heatsink and fans": (12 * m_sink + 80, m_sink / 2.7 / 0.35 + 1.0, m_sink + 0.5),
-        "EMI filters (2 ports)": (700, 4.0, 6.0),
-        "Contactors, fuses, surge (2 ports)": (500, 1.6, 2.4),
+        "EMI filters (2 ports)": (500, 2.8, 4.2) if low else (700, 4.0, 6.0),
+        "Contactors, fuses, surge (2 ports)": (350, 1.2, 1.6) if low else (500, 1.6, 2.4),
         "Sensing, control, aux supply": (550, 1.2, 0.8),
-        "Busbars, PCBs, enclosure": (700, 0.0, 4.0),
+        "Busbars, PCBs, enclosure": (550, 0.0, 3.0) if low else (700, 0.0, 4.0),
     }
-    return finish(items)
+    r = finish(items)
+    r["m_sink"] = m_sink
+    return r
+
+
+def sink_mass(m_peak, p_cont):
+    """Heatsink mass: enough thermal mass for the 10 s event AND enough fin volume
+    (about 80 cm^3 K/W forced air, 15 K rise) for the continuous dissipation."""
+    return max(m_peak, p_cont * 80e-3 / 15.0 * 2.7 * 0.35)
 
 
 def finish(items, packing=0.45):
@@ -480,7 +491,19 @@ CHOP_L = 20e-6         # H at rated current; soft-saturating core, about 6 uH at
 CHOP_RL = 0.4e-3       # ohm inductor winding (EST)
 
 
-def chopper(v_lo=120.0, v_hi=277.0, f=70e3):
+def _chop_loss(d, m, p, t_j, v_lo, duty, f, p_sw):
+    i = p / v_lo
+    ripple = math.sqrt(2) * v_lo * (1 - duty) / (f * CHOP_L) / math.sqrt(12) / math.sqrt(2)
+    i2 = i ** 2 + ripple ** 2
+    parts = dict(cond=2 * d.rds(t_j) * i2, sw=p_sw(i, m), gate=2 * d.qg * V_GATE_SWING * f,
+                 inductor=CHOP_RL * i2 * (1.0 if p <= P_CONT else 1.3) + 12.0,
+                 bus=R_BUS_SIDE * (i ** 2 + (i * duty) ** 2), aux=25.0)
+    parts["loss"] = sum(parts.values())
+    parts["eff"] = 1 - parts["loss"] / p
+    return parts
+
+
+def chopper(v_lo=120.0, v_hi=277.0, f=70e3, max_loss=150.0):
     """
     Non-isolated voltage-converting block: bidirectional AC chopper (electronic
     autotransformer) with a straight-through neutral.  Two bidirectional SiC
@@ -504,12 +527,15 @@ def chopper(v_lo=120.0, v_hi=277.0, f=70e3):
         for _ in range(12):
             p_grp = max(duty, 1 - duty) * d.rds(tj) * I_PEAK ** 2 + p_sw(I_PEAK, m)
             tj = min(T_SINK_CONT + DT_SINK_PEAK + p_grp * (d.rth_jc + d.rth_cs), 400.0)
-        if tj <= TJ_LIMIT:
+        if tj <= TJ_LIMIT and _chop_loss(d, m, P_CONT, 70.0, v_lo, duty, f, p_sw)["loss"] <= max_loss:
             sel = (m, d, tj)
             break
     m, d, tj = sel
 
     def loss(p, t_j):
+        return _chop_loss(d, m, p, t_j, v_lo, duty, f, p_sw)
+
+    def _unused(p, t_j):
         i = p / v_lo
         ripple = math.sqrt(2) * v_lo * (1 - duty) / (f * CHOP_L) / math.sqrt(12) / math.sqrt(2)
         i2 = i ** 2 + ripple ** 2
@@ -524,18 +550,20 @@ def chopper(v_lo=120.0, v_hi=277.0, f=70e3):
     part = loss(0.25 * P_CONT, 60.0)
     p_pk = v_lo * I_PEAK
     peak = loss(p_pk, tj)
-    m_sink = max(2.0, (peak["cond"] + peak["sw"]) * T_PEAK / (900 * DT_SINK_PEAK))
+    m_sink = sink_mass(max(2.0, (peak["cond"] + peak["sw"]) * T_PEAK / (900 * DT_SINK_PEAK)),
+                       cont["cond"] + cont["sw"])
+    low = I_PEAK < 250
     items = {
         "Switches (4 groups)": (4 * d.cost_sw, pkg_volume_l(d, 4), 0.4),
         "Gate drives": (4 * 30, 0.0, 0.2),
-        "Inductor": (220, 1.5, 3.5),
+        "Inductor": (160, 1.3, 2.6) if low else (220, 1.5, 3.5),
         "Port capacitors, snubber": (60, 0.4, 0.4),
         "Low-side over-voltage crowbar": (150, 0.3, 0.3),
         "Heatsink and fans": (12 * m_sink + 60, m_sink / 2.7 / 0.35 + 0.8, m_sink + 0.4),
-        "EMI filters (2 ports)": (500, 2.8, 4.2),
-        "Contactors, fuses, surge (2 ports)": (500, 1.6, 2.4),
+        "EMI filters (2 ports)": (380, 2.0, 3.0) if low else (500, 2.8, 4.2),
+        "Contactors, fuses, surge (2 ports)": (350, 1.2, 1.6) if low else (500, 1.6, 2.4),
         "Sensing, control, aux supply": (550, 1.2, 0.8),
-        "Busbars, PCBs, enclosure": (500, 0.0, 3.0),
+        "Busbars, PCBs, enclosure": (400, 0.0, 2.5) if low else (500, 0.0, 3.0),
     }
     r = finish(items)
     r.update(v_lo=v_lo, v_hi=v_hi, duty=duty, m=m, devices=4 * m, tj=tj, cont=cont, part=part,
@@ -694,7 +722,7 @@ def main():
     make_plots(out, r)
 
 
-def make_plots(out, sel):
+def make_plots(out, sel, suffix=""):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -718,7 +746,7 @@ def make_plots(out, sel):
         a.grid(axis="y", alpha=0.3)
     ax[0].legend(fontsize=7)
     ax2 = ax[2]
-    ax2.plot(fk, [2 * s["xf"]["mass_kg"] for s in sw], "o-", label="transformer mass, 2 cells (kg)")
+    ax2.plot(fk, [sel["n_cells"] * s["xf"]["mass_kg"] for s in sw], "o-", label="transformer mass, total (kg)")
     ax2.plot(fk, [s["peak_loss"] / 1e3 for s in sw], "s-", label="worst 10 s peak loss (kW)")
     ax2.plot(fk, [s["cont"]["240"]["t_phi_ns"] / 10 for s in sw], "^-", label="phase shift at 10 kW / 240 V (x10 ns)")
     ax2.set_xlabel("switching frequency, kHz")
@@ -726,7 +754,7 @@ def make_plots(out, sel):
     ax2.grid(alpha=0.3)
     ax2.legend(fontsize=7)
     fig.tight_layout()
-    fig.savefig(os.path.join(OUT, "img", "frequency_sweep.png"), dpi=130)
+    fig.savefig(os.path.join(OUT, "img", f"frequency_sweep{suffix}.png"), dpi=130)
 
     kw = sel["_kw"]
     fig, (a, b) = plt.subplots(1, 2, figsize=(13, 4.5))
@@ -754,7 +782,7 @@ def make_plots(out, sel):
     b.grid(alpha=0.3)
     b.legend()
     fig.tight_layout()
-    fig.savefig(os.path.join(OUT, "img", "efficiency.png"), dpi=130)
+    fig.savefig(os.path.join(OUT, "img", f"efficiency{suffix}.png"), dpi=130)
 
 
 if __name__ == "__main__":
