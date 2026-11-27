@@ -7,6 +7,8 @@ below), SiC, 70 kHz. One block of a three-phase, parallelable system.
   transformer, control, compliance, open items).
 * `docs/DESIGN_20KW.md` - the 20 kW-peak variant of both the isolated and the
   non-isolated block (`tools/dab_design_20kw.py`).
+* `docs/DESIGN_COST.md` - cost-optimised versions with prototype and 1000-unit
+  cost (`tools/dab_cost.py`).
 * `tools/dab_design.py` - sizing model: thermal device sizing, frequency sweep,
   transformer optimiser, loss tables, cost/volume roll-up, non-isolated AC-chopper
   variant (120 V to 277/230 V),

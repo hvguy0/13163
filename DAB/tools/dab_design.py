@@ -215,6 +215,8 @@ DT_MAX = 55.0          # K steady-state rise allowed
 DT_ADIABATIC_MAX = 30.0
 B_SAT_LIMIT = 0.28     # T at +10 % line, leaves margin to ~0.38 T @ 100 C
 W_PER_KG = 4.0         # objective: W of continuous loss traded per kg
+STRANDS = (0.05e-3, 0.071e-3, 0.10e-3)   # litz strand diameters the optimiser may use
+IM_BUCKET = 1.0        # A; transformer designs are cached per magnetising-current bucket
 
 
 def rho_cu(t):
@@ -254,7 +256,7 @@ def design_transformer(f, l_cell, n_cells, im_pk_403, mat=1.0):
                 if b_max > B_SAT_LIMIT:
                     continue
                 for m in (1, 2):
-                    for d_s in (0.05e-3, 0.071e-3, 0.10e-3):
+                    for d_s in STRANDS:
                         for xf in (0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.65, 0.8, 1.0):
                             avail = core.ww * 1e-3 - BOBBIN - m * G_MIN
                             h_cu = xf * avail            # pri + sec radial copper
@@ -374,7 +376,7 @@ _XF_CACHE = {}
 def evaluate(f, n_cells, mod, unf_mod, mat=1.0):
     l_cell = l_cell_required(f, n_cells)
     im = 4 * float(mod.qoss(403.0)) / T_DEAD        # magnetising peak for ZVS at crest
-    key = (f, n_cells, round(im), mat)
+    key = (f, n_cells, round(im / IM_BUCKET), mat, STRANDS, W_PER_KG)
     if key not in _XF_CACHE:
         _XF_CACHE[key] = design_transformer(f, l_cell, n_cells, im, mat)
     xf = _XF_CACHE[key]
